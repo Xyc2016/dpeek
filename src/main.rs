@@ -206,19 +206,7 @@ pub fn preview(
 pub fn is_remote_source(path: &PathBuf) -> bool {
     let raw = path.to_string_lossy();
     let raw = raw.split(['?', '#']).next().unwrap_or(&raw);
-    raw.starts_with("http://")
-        || raw.starts_with("https://")
-        || raw.starts_with("s3://")
-        || raw.starts_with("s3a://")
-        || raw.starts_with("gs://")
-        || raw.starts_with("gcs://")
-        || raw.starts_with("file://")
-        || raw.starts_with("abfs://")
-        || raw.starts_with("abfss://")
-        || raw.starts_with("azure://")
-        || raw.starts_with("az://")
-        || raw.starts_with("adl://")
-        || raw.starts_with("hf://")
+    raw.contains("://")
 }
 
 fn new_lazy_frame(path: &PathBuf, fmt: &Format) -> LazyFrame {
