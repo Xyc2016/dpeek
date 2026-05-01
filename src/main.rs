@@ -157,12 +157,6 @@ pub fn preview(
     Ok((Some(total_rows), n_cols, df))
 }
 
-fn is_remote_source(path: &PathBuf) -> bool {
-    let raw = path.to_string_lossy();
-    let raw = raw.split(['?', '#']).next().unwrap_or(&raw);
-    raw.contains("://")
-}
-
 fn new_lazy_frame(path: &PathBuf, fmt: &Format) -> LazyFrame {
     match fmt {
         Format::Parquet => LazyFrame::scan_parquet(path, ScanArgsParquet::default()).unwrap(),
@@ -215,13 +209,6 @@ mod tests {
     fn detect_format_remote_csv_with_query() {
         let path = PathBuf::from("https://example.com/data.csv?download=1");
         assert!(matches!(detect_format(&path).unwrap(), Format::Csv));
-    }
-
-    #[test]
-    fn remote_source_detection() {
-        assert!(is_remote_source(&PathBuf::from("https://example.com/data.parquet")));
-        assert!(is_remote_source(&PathBuf::from("s3://bucket/data.parquet")));
-        assert!(!is_remote_source(&PathBuf::from("examples/titanic.parquet")));
     }
 
     #[test]
