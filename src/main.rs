@@ -147,7 +147,15 @@ pub fn preview(
         let mut lf = new_lazy_frame(path, fmt);
         let n_cols = lf.collect_schema()?.len();
         let (total_rows, df) = match mode {
-            Mode::Head => (None, lf.fetch(n)?),
+            Mode::Head => match fmt {
+                Format::Parquet => {
+                    // Read row count from footer only, then fetch top n rows
+                    let count_df = lf.clone().count().collect()?;
+                    let total_rows = count_df.get_columns()[0].u32()?.get(0).unwrap_or(0) as usize;
+                    (Some(total_rows), lf.fetch(n)?)
+                }
+                Format::Csv => (None, lf.fetch(n)?),
+            },
             Mode::Tail => match fmt {
                 Format::Parquet => {
                     // Read row count from Parquet footer metadata only (no column data downloaded)
