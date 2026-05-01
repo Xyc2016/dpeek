@@ -1,0 +1,11 @@
+[package]
+name = "dpeek"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+polars = { version = "0.46", features = ["parquet", "csv", "lazy", "timezones"] }
+clap = { version = "4", features = ["derive", "color"] }
+regex = "1"
+owo-colors = { version = "4", features = ["supports-colors"] }
+anstyle = "1.0.14"
