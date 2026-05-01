@@ -148,11 +148,23 @@ pub fn preview(
         let n_cols = lf.collect_schema()?.len();
         let (total_rows, df) = match mode {
             Mode::Head => (None, lf.fetch(n)?),
-            Mode::Tail => {
-                let df = lf.collect()?;
-                let total_rows = df.height();
-                (Some(total_rows), df.tail(Some(n)))
-            }
+            Mode::Tail => match fmt {
+                Format::Parquet => {
+                    // Read row count from Parquet footer metadata only (no column data downloaded)
+                    let count_df = lf.clone().count().collect()?;
+                    let total_rows = count_df.get_columns()[0].u32()?.get(0).unwrap_or(0) as usize;
+                    let offset = (total_rows as i64).saturating_sub(n as i64);
+                    // Slice pushdown: Polars only fetches the row groups covering [offset, offset+n)
+                    let df = lf.slice(offset, n as u32).collect()?;
+                    (Some(total_rows), df)
+                }
+                Format::Csv => {
+                    // CSV has no footer metadata; full download is unavoidable for tail
+                    let df = lf.collect()?;
+                    let total_rows = df.height();
+                    (Some(total_rows), df.tail(Some(n)))
+                }
+            },
         };
         return Ok((total_rows, n_cols, df));
     }
