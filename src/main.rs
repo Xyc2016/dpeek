@@ -130,19 +130,8 @@ pub fn preview(
         }
     }
 
-    // CSV eager (default): full scan/download — gives total rows and supports tail
-    if matches!(fmt, Format::Csv) {
-        let df = new_lazy_frame(path, fmt).collect()?;
-        let total_rows = df.height();
-        let n_cols = df.width();
-        let result_df = match mode {
-            Mode::Head => df.head(Some(n)),
-            Mode::Tail => df.tail(Some(n)),
-        };
-        return Ok((Some(total_rows), n_cols, result_df));
-    }
-
-    // Parquet: read footer for row count, slice pushdown for data (works for both local and remote)
+    // Streaming row count (no full materialization) + slice pushdown for data.
+    // Works for both CSV and Parquet, local and remote.
     let mut lf = new_lazy_frame(path, fmt);
     let n_cols = lf.collect_schema()?.len();
     let count_df = lf.clone().select([len()]).collect()?;
