@@ -1,7 +1,7 @@
 mod highlight;
 
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand, builder::Styles};
 use owo_colors::OwoColorize;
 use polars::prelude::*;
@@ -71,7 +71,8 @@ fn main() {
 
 fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool) -> Result<(), Box<dyn std::error::Error>> {
     let fmt = detect_format(path).map_err(|e| format!("{}: {}", path.display(), e))?;
-    let (total_rows, n_cols) = metadata(path, &fmt)?;
+    let remote = is_remote_source(path);
+    let (total_rows, n_cols, df) = preview(path, &fmt, n, mode, remote)?;
 
     let showing = match mode { Mode::Head => "top", Mode::Tail => "last" };
     let display_n = total_rows.map(|r| n.min(r)).unwrap_or(n);
@@ -94,7 +95,6 @@ fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool) -> Result<(), Box<d
         }
     }
 
-    let df = fetch_df(path, &fmt, n, mode, total_rows)?;
     let text: String = df.to_string().lines().skip(1).collect::<Vec<_>>().join("\n");
     if colorize {
         println!("{}", rich_highlight(&text));
@@ -136,6 +136,50 @@ pub fn fetch_df(path: &PathBuf, fmt: &Format, n: usize, mode: Mode, total_rows: 
     }
 }
 
+pub fn preview(
+    path: &PathBuf,
+    fmt: &Format,
+    n: usize,
+    mode: Mode,
+    remote: bool,
+) -> Result<(Option<usize>, usize, DataFrame), Box<dyn std::error::Error>> {
+    if remote {
+        let mut lf = new_lazy_frame(path, fmt);
+        let n_cols = lf.collect_schema()?.len();
+        let (total_rows, df) = match mode {
+            Mode::Head => (None, lf.fetch(n)?),
+            Mode::Tail => {
+                let df = lf.collect()?;
+                let total_rows = df.height();
+                (Some(total_rows), df.tail(Some(n)))
+            }
+        };
+        return Ok((total_rows, n_cols, df));
+    }
+
+    let (total_rows, n_cols) = metadata(path, fmt)?;
+    let df = fetch_df(path, fmt, n, mode, total_rows)?;
+    Ok((total_rows, n_cols, df))
+}
+
+pub fn is_remote_source(path: &PathBuf) -> bool {
+    let raw = path.to_string_lossy();
+    let raw = raw.split(['?', '#']).next().unwrap_or(&raw);
+    raw.starts_with("http://")
+        || raw.starts_with("https://")
+        || raw.starts_with("s3://")
+        || raw.starts_with("s3a://")
+        || raw.starts_with("gs://")
+        || raw.starts_with("gcs://")
+        || raw.starts_with("file://")
+        || raw.starts_with("abfs://")
+        || raw.starts_with("abfss://")
+        || raw.starts_with("azure://")
+        || raw.starts_with("az://")
+        || raw.starts_with("adl://")
+        || raw.starts_with("hf://")
+}
+
 fn new_lazy_frame(path: &PathBuf, fmt: &Format) -> LazyFrame {
     match fmt {
         Format::Parquet => LazyFrame::scan_parquet(path, ScanArgsParquet::default()).unwrap(),
@@ -146,7 +190,9 @@ fn new_lazy_frame(path: &PathBuf, fmt: &Format) -> LazyFrame {
 pub enum Format { Parquet, Csv }
 
 pub fn detect_format(path: &PathBuf) -> Result<Format, &'static str> {
-    match path.extension().and_then(|e| e.to_str()) {
+    let raw = path.to_string_lossy();
+    let raw = raw.split(['?', '#']).next().unwrap_or(&raw);
+    match Path::new(raw).extension().and_then(|e| e.to_str()) {
         Some("parquet") => Ok(Format::Parquet),
         Some("csv")     => Ok(Format::Csv),
         _               => Err("unsupported format: expected .parquet or .csv"),
@@ -177,11 +223,30 @@ mod tests {
     }
 
     #[test]
+    fn detect_format_remote_parquet_with_query() {
+        let path = PathBuf::from("https://example.com/data.parquet?download=1");
+        assert!(matches!(detect_format(&path).unwrap(), Format::Parquet));
+    }
+
+    #[test]
+    fn detect_format_remote_csv_with_query() {
+        let path = PathBuf::from("https://example.com/data.csv?download=1");
+        assert!(matches!(detect_format(&path).unwrap(), Format::Csv));
+    }
+
+    #[test]
+    fn remote_source_detection() {
+        assert!(is_remote_source(&PathBuf::from("https://example.com/data.parquet")));
+        assert!(is_remote_source(&PathBuf::from("s3://bucket/data.parquet")));
+        assert!(!is_remote_source(&PathBuf::from("examples/titanic.parquet")));
+    }
+
+    #[test]
     fn head_parquet_row_count() {
         let path = examples_dir().join("titanic.parquet");
         let fmt = detect_format(&path).unwrap();
-        let (total, _) = metadata(&path, &fmt).unwrap();
-        let df = fetch_df(&path, &fmt, 7, Mode::Head, total).unwrap();
+        let (total, _, df) = preview(&path, &fmt, 7, Mode::Head, false).unwrap();
+        assert_eq!(total, Some(891));
         assert_eq!(df.height(), 7);
     }
 
@@ -189,8 +254,8 @@ mod tests {
     fn tail_parquet_row_count() {
         let path = examples_dir().join("titanic.parquet");
         let fmt = detect_format(&path).unwrap();
-        let (total, _) = metadata(&path, &fmt).unwrap();
-        let df = fetch_df(&path, &fmt, 7, Mode::Tail, total).unwrap();
+        let (total, _, df) = preview(&path, &fmt, 7, Mode::Tail, false).unwrap();
+        assert_eq!(total, Some(891));
         assert_eq!(df.height(), 7);
     }
 
@@ -198,8 +263,8 @@ mod tests {
     fn head_csv_row_count() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
-        let (total, _) = metadata(&path, &fmt).unwrap();
-        let df = fetch_df(&path, &fmt, 10, Mode::Head, total).unwrap();
+        let (total, _, df) = preview(&path, &fmt, 10, Mode::Head, false).unwrap();
+        assert_eq!(total, None);
         assert_eq!(df.height(), 10);
     }
 
@@ -207,8 +272,8 @@ mod tests {
     fn tail_csv_row_count() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
-        let (total, _) = metadata(&path, &fmt).unwrap();
-        let df = fetch_df(&path, &fmt, 10, Mode::Tail, total).unwrap();
+        let (total, _, df) = preview(&path, &fmt, 10, Mode::Tail, false).unwrap();
+        assert_eq!(total, None);
         assert_eq!(df.height(), 10);
     }
 
@@ -216,9 +281,10 @@ mod tests {
     fn head_and_tail_parquet_differ() {
         let path = examples_dir().join("titanic.parquet");
         let fmt = detect_format(&path).unwrap();
-        let (total, _) = metadata(&path, &fmt).unwrap();
-        let head = fetch_df(&path, &fmt, 3, Mode::Head, total).unwrap();
-        let tail = fetch_df(&path, &fmt, 3, Mode::Tail, total).unwrap();
+        let (head_total, _, head) = preview(&path, &fmt, 3, Mode::Head, false).unwrap();
+        let (tail_total, _, tail) = preview(&path, &fmt, 3, Mode::Tail, false).unwrap();
+        assert_eq!(head_total, Some(891));
+        assert_eq!(tail_total, Some(891));
         assert_ne!(head.get(0).unwrap(), tail.get(0).unwrap());
     }
 
@@ -226,9 +292,10 @@ mod tests {
     fn head_and_tail_csv_differ() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
-        let (total, _) = metadata(&path, &fmt).unwrap();
-        let head = fetch_df(&path, &fmt, 3, Mode::Head, total).unwrap();
-        let tail = fetch_df(&path, &fmt, 3, Mode::Tail, total).unwrap();
+        let (head_total, _, head) = preview(&path, &fmt, 3, Mode::Head, false).unwrap();
+        let (tail_total, _, tail) = preview(&path, &fmt, 3, Mode::Tail, false).unwrap();
+        assert_eq!(head_total, None);
+        assert_eq!(tail_total, None);
         assert_ne!(head.get(0).unwrap(), tail.get(0).unwrap());
     }
 }
