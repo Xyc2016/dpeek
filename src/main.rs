@@ -182,12 +182,12 @@ pub fn preview(
         let n_cols = lf.collect_schema()?.len();
         let (total_rows, df) = match mode {
             Mode::Head => {
-                let count_df = lf.clone().count().collect()?;
+                let count_df = lf.clone().select([len()]).collect()?;
                 let total_rows = count_df.get_columns()[0].u32()?.get(0).unwrap_or(0) as usize;
                 (Some(total_rows), lf.fetch(n)?)
             }
             Mode::Tail => {
-                let count_df = lf.clone().count().collect()?;
+                let count_df = lf.clone().select([len()]).collect()?;
                 let total_rows = count_df.get_columns()[0].u32()?.get(0).unwrap_or(0) as usize;
                 let offset = (total_rows as i64).saturating_sub(n as i64);
                 let df = lf.slice(offset, n as u32).collect()?;
