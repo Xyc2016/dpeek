@@ -29,6 +29,8 @@ fn help_styles() -> Styles {
 }
 
 fn main() {
+    // fetch(n) already limits rows; set -1 so Polars never truncates the display
+    std::env::set_var("POLARS_FMT_MAX_ROWS", "-1");
     let cli = Cli::parse();
     let colorize = std::io::stdout().is_terminal();
 
@@ -74,7 +76,6 @@ fn run(path: &PathBuf, n: usize, colorize: bool) -> Result<(), Box<dyn std::erro
     }
 
     let df = new_lazy_frame(path, &fmt).fetch(n)?;
-    std::env::set_var("POLARS_FMT_MAX_ROWS", n.to_string());
     let text: String = df.to_string().lines().skip(1).collect::<Vec<_>>().join("\n");
     if colorize {
         println!("{}", rich_highlight(&text));
