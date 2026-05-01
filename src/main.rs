@@ -78,8 +78,7 @@ fn main() {
 
 fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool, lazy: bool) -> Result<(), Box<dyn std::error::Error>> {
     let fmt = detect_format(path).map_err(|e| format!("{}: {}", path.display(), e))?;
-    let remote = is_remote_source(path);
-    let (total_rows, n_cols, df) = preview(path, &fmt, n, mode, remote, lazy)?;
+    let (total_rows, n_cols, df) = preview(path, &fmt, n, mode, lazy)?;
 
     let showing = match mode { Mode::Head => "top", Mode::Tail => "last" };
     let display_n = total_rows.map(|r| n.min(r)).unwrap_or(n);
@@ -111,44 +110,11 @@ fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool, lazy: bool) -> Resu
     Ok(())
 }
 
-pub fn metadata(path: &PathBuf, fmt: &Format) -> Result<(Option<usize>, usize), Box<dyn std::error::Error>> {
-    match fmt {
-        Format::Parquet => {
-            let f = std::fs::File::open(path)?;
-            let mut reader = ParquetReader::new(f);
-            let total = reader.num_rows()?;
-            let cols = reader.schema()?.len();
-            Ok((Some(total), cols))
-        }
-        Format::Csv => {
-            let mut lf = LazyCsvReader::new(path).finish()?;
-            let schema = lf.collect_schema()?;
-            Ok((None, schema.len()))
-        }
-    }
-}
-
-pub fn fetch_df(path: &PathBuf, fmt: &Format, n: usize, mode: Mode, total_rows: Option<usize>) -> PolarsResult<DataFrame> {
-    let lf = new_lazy_frame(path, fmt);
-    match mode {
-        Mode::Head => lf.fetch(n),
-        Mode::Tail => match fmt {
-            Format::Parquet => {
-                let total = total_rows.expect("parquet always has total_rows");
-                let offset = (total as i64).saturating_sub(n as i64);
-                lf.slice(offset, n as u32).collect()
-            }
-            Format::Csv => Ok(lf.collect()?.tail(Some(n))),
-        },
-    }
-}
-
 pub fn preview(
     path: &PathBuf,
     fmt: &Format,
     n: usize,
     mode: Mode,
-    remote: bool,
     lazy: bool,
 ) -> Result<(Option<usize>, usize, DataFrame), Box<dyn std::error::Error>> {
     // CSV --lazy: fast path, no full scan/download
@@ -176,34 +142,22 @@ pub fn preview(
         return Ok((Some(total_rows), n_cols, result_df));
     }
 
-    // Parquet remote: read footer for row count, slice pushdown for data
-    if remote {
-        let mut lf = new_lazy_frame(path, fmt);
-        let n_cols = lf.collect_schema()?.len();
-        let (total_rows, df) = match mode {
-            Mode::Head => {
-                let count_df = lf.clone().select([len()]).collect()?;
-                let total_rows = count_df.get_columns()[0].u32()?.get(0).unwrap_or(0) as usize;
-                (Some(total_rows), lf.fetch(n)?)
-            }
-            Mode::Tail => {
-                let count_df = lf.clone().select([len()]).collect()?;
-                let total_rows = count_df.get_columns()[0].u32()?.get(0).unwrap_or(0) as usize;
-                let offset = (total_rows as i64).saturating_sub(n as i64);
-                let df = lf.slice(offset, n as u32).collect()?;
-                (Some(total_rows), df)
-            }
-        };
-        return Ok((total_rows, n_cols, df));
-    }
-
-    // Parquet local
-    let (total_rows, n_cols) = metadata(path, fmt)?;
-    let df = fetch_df(path, fmt, n, mode, total_rows)?;
-    Ok((total_rows, n_cols, df))
+    // Parquet: read footer for row count, slice pushdown for data (works for both local and remote)
+    let mut lf = new_lazy_frame(path, fmt);
+    let n_cols = lf.collect_schema()?.len();
+    let count_df = lf.clone().select([len()]).collect()?;
+    let total_rows = count_df.get_columns()[0].u32()?.get(0).unwrap_or(0) as usize;
+    let df = match mode {
+        Mode::Head => lf.fetch(n)?,
+        Mode::Tail => {
+            let offset = (total_rows as i64).saturating_sub(n as i64);
+            lf.slice(offset, n as u32).collect()?
+        }
+    };
+    Ok((Some(total_rows), n_cols, df))
 }
 
-pub fn is_remote_source(path: &PathBuf) -> bool {
+fn is_remote_source(path: &PathBuf) -> bool {
     let raw = path.to_string_lossy();
     let raw = raw.split(['?', '#']).next().unwrap_or(&raw);
     raw.contains("://")
@@ -274,7 +228,7 @@ mod tests {
     fn head_parquet_row_count() {
         let path = examples_dir().join("titanic.parquet");
         let fmt = detect_format(&path).unwrap();
-        let (total, _, df) = preview(&path, &fmt, 7, Mode::Head, false, false).unwrap();
+        let (total, _, df) = preview(&path, &fmt, 7, Mode::Head, false).unwrap();
         assert_eq!(total, Some(891));
         assert_eq!(df.height(), 7);
     }
@@ -283,7 +237,7 @@ mod tests {
     fn tail_parquet_row_count() {
         let path = examples_dir().join("titanic.parquet");
         let fmt = detect_format(&path).unwrap();
-        let (total, _, df) = preview(&path, &fmt, 7, Mode::Tail, false, false).unwrap();
+        let (total, _, df) = preview(&path, &fmt, 7, Mode::Tail, false).unwrap();
         assert_eq!(total, Some(891));
         assert_eq!(df.height(), 7);
     }
@@ -292,7 +246,7 @@ mod tests {
     fn head_csv_row_count() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
-        let (total, _, df) = preview(&path, &fmt, 10, Mode::Head, false, false).unwrap();
+        let (total, _, df) = preview(&path, &fmt, 10, Mode::Head, false).unwrap();
         assert_eq!(total, Some(150));
         assert_eq!(df.height(), 10);
     }
@@ -301,7 +255,7 @@ mod tests {
     fn tail_csv_row_count() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
-        let (total, _, df) = preview(&path, &fmt, 10, Mode::Tail, false, false).unwrap();
+        let (total, _, df) = preview(&path, &fmt, 10, Mode::Tail, false).unwrap();
         assert_eq!(total, Some(150));
         assert_eq!(df.height(), 10);
     }
@@ -310,7 +264,7 @@ mod tests {
     fn lazy_csv_head_no_row_count() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
-        let (total, _, df) = preview(&path, &fmt, 5, Mode::Head, false, true).unwrap();
+        let (total, _, df) = preview(&path, &fmt, 5, Mode::Head, true).unwrap();
         assert_eq!(total, None);
         assert_eq!(df.height(), 5);
     }
@@ -319,15 +273,15 @@ mod tests {
     fn lazy_csv_tail_errors() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
-        assert!(preview(&path, &fmt, 5, Mode::Tail, false, true).is_err());
+        assert!(preview(&path, &fmt, 5, Mode::Tail, true).is_err());
     }
 
     #[test]
     fn head_and_tail_parquet_differ() {
         let path = examples_dir().join("titanic.parquet");
         let fmt = detect_format(&path).unwrap();
-        let (head_total, _, head) = preview(&path, &fmt, 3, Mode::Head, false, false).unwrap();
-        let (tail_total, _, tail) = preview(&path, &fmt, 3, Mode::Tail, false, false).unwrap();
+        let (head_total, _, head) = preview(&path, &fmt, 3, Mode::Head, false).unwrap();
+        let (tail_total, _, tail) = preview(&path, &fmt, 3, Mode::Tail, false).unwrap();
         assert_eq!(head_total, Some(891));
         assert_eq!(tail_total, Some(891));
         assert_ne!(head.get(0).unwrap(), tail.get(0).unwrap());
@@ -337,8 +291,8 @@ mod tests {
     fn head_and_tail_csv_differ() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
-        let (head_total, _, head) = preview(&path, &fmt, 3, Mode::Head, false, false).unwrap();
-        let (tail_total, _, tail) = preview(&path, &fmt, 3, Mode::Tail, false, false).unwrap();
+        let (head_total, _, head) = preview(&path, &fmt, 3, Mode::Head, false).unwrap();
+        let (tail_total, _, tail) = preview(&path, &fmt, 3, Mode::Tail, false).unwrap();
         assert_eq!(head_total, Some(150));
         assert_eq!(tail_total, Some(150));
         assert_ne!(head.get(0).unwrap(), tail.get(0).unwrap());
