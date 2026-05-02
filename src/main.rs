@@ -102,6 +102,9 @@ fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool, lazy: bool, delimit
     if path.to_string_lossy().contains("://") {
         return Err(format!("{}: remote files are not supported", path.display()).into());
     }
+    if !path.exists() {
+        return Err(format!("{}: no such file", path.display()).into());
+    }
     let fmt = detect_format(path).map_err(|e| format!("{}: {}", path.display(), e))?;
     let (total_rows, n_cols, df) = preview(path, &fmt, n, mode, lazy, delimiter)?;
 
@@ -138,6 +141,9 @@ fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool, lazy: bool, delimit
 fn print_schema(path: &PathBuf, colorize: bool, lazy: bool, delimiter: Option<u8>) -> Result<(), Box<dyn std::error::Error>> {
     if path.to_string_lossy().contains("://") {
         return Err(format!("{}: remote files are not supported", path.display()).into());
+    }
+    if !path.exists() {
+        return Err(format!("{}: no such file", path.display()).into());
     }
     let fmt = detect_format(path).map_err(|e| format!("{}: {}", path.display(), e))?;
 
