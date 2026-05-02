@@ -77,6 +77,9 @@ fn main() {
 }
 
 fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool, lazy: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if path.to_string_lossy().contains("://") {
+        return Err(format!("{}: remote files are not supported", path.display()).into());
+    }
     let fmt = detect_format(path).map_err(|e| format!("{}: {}", path.display(), e))?;
     let (total_rows, n_cols, df) = preview(path, &fmt, n, mode, lazy)?;
 
