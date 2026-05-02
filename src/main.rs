@@ -138,8 +138,6 @@ pub fn preview(
 
     // Row count strategy:
     // - Parquet: ParquetReader::num_rows() reads only the footer (O(1), no data scan).
-    //   select([len()]).collect() looks equivalent but Polars 0.52+ removed the fast-count
-    //   optimization for Parquet — it falls back to a full file scan.
     // - CSV: select([len()]).collect() is fine; Polars uses a fast metadata path for CSV.
     let total_rows: usize = match fmt {
         Format::Parquet => {
