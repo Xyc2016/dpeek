@@ -133,20 +133,24 @@ pub fn preview(
         }
     }
 
-    let mut lf = new_lazy_frame(path, fmt);
-    let n_cols = lf.collect_schema()?.len();
-
-    // Row count strategy:
-    // - Parquet: ParquetReader::num_rows() reads only the footer (O(1), no data scan).
-    // - CSV: select([len()]).collect() is fine; Polars uses a fast metadata path for CSV.
-    let total_rows: usize = match fmt {
+    // Parquet: open once, parse footer once → get both schema (n_cols) and row count.
+    // This avoids a duplicate footer parse that collect_schema() would cause.
+    // CSV: still needs collect_schema() + select([len()]) via LazyFrame.
+    let (n_cols, total_rows, lf) = match fmt {
         Format::Parquet => {
             let f = std::fs::File::open(path)?;
-            ParquetReader::new(f).num_rows()?
+            let mut reader = ParquetReader::new(f);
+            let total_rows = reader.num_rows()?;  // parses + caches footer
+            let n_cols = reader.schema()?.len();  // reuses cached footer
+            let lf = new_lazy_frame(path, fmt);
+            (n_cols, total_rows, lf)
         }
         Format::Csv => {
+            let mut lf = new_lazy_frame(path, fmt);
+            let n_cols = lf.collect_schema()?.len();
             let count_df = lf.clone().select([len()]).collect()?;
-            count_df.columns()[0].as_materialized_series().u32()?.get(0).unwrap_or(0) as usize
+            let total_rows = count_df.columns()[0].as_materialized_series().u32()?.get(0).unwrap_or(0) as usize;
+            (n_cols, total_rows, lf)
         }
     };
 
@@ -157,6 +161,7 @@ pub fn preview(
             lf.slice(offset, n as u32).collect()?
         }
     };
+
     Ok((Some(total_rows), n_cols, df))
 }
 
