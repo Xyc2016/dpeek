@@ -22,6 +22,10 @@ struct Cli {
     #[arg(long)]
     lazy: bool,
 
+    /// Field separator character (default: comma). Use \t for tab.
+    #[arg(short = 'd', long)]
+    delimiter: Option<String>,
+
     #[command(subcommand)]
     command: Option<SubCmd>,
 }
@@ -38,6 +42,9 @@ enum SubCmd {
         /// Fast mode: skip full CSV scan (CSV tail is disabled with this flag)
         #[arg(long)]
         lazy: bool,
+        /// Field separator character (default: comma). Use \t for tab.
+        #[arg(short = 'd', long)]
+        delimiter: Option<String>,
     },
     /// Show column names and types without loading data
     Schema {
@@ -46,6 +53,9 @@ enum SubCmd {
         /// Fast mode: infer CSV types from first 100 rows only, skip row count scan
         #[arg(long)]
         lazy: bool,
+        /// Field separator character (default: comma). Use \t for tab.
+        #[arg(short = 'd', long)]
+        delimiter: Option<String>,
     },
 }
 
@@ -68,10 +78,13 @@ fn main() {
     let colorize = std::io::stdout().is_terminal();
 
     let result = match cli.command {
-        Some(SubCmd::Tail { file, n, lazy }) => run(&file, n, Mode::Tail, colorize, lazy),
-        Some(SubCmd::Schema { file, lazy }) => print_schema(&file, colorize, lazy),
+        Some(SubCmd::Tail { file, n, lazy, delimiter }) =>
+            parse_delimiter_opt(delimiter.as_deref()).and_then(|sep| run(&file, n, Mode::Tail, colorize, lazy, sep)),
+        Some(SubCmd::Schema { file, lazy, delimiter }) =>
+            parse_delimiter_opt(delimiter.as_deref()).and_then(|sep| print_schema(&file, colorize, lazy, sep)),
         None => match cli.file {
-            Some(file) => run(&file, cli.n, Mode::Head, colorize, cli.lazy),
+            Some(file) =>
+                parse_delimiter_opt(cli.delimiter.as_deref()).and_then(|sep| run(&file, cli.n, Mode::Head, colorize, cli.lazy, sep)),
             None => {
                 eprintln!("error: provide a file or subcommand. Try --help");
                 std::process::exit(1);
@@ -85,12 +98,12 @@ fn main() {
     }
 }
 
-fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool, lazy: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool, lazy: bool, delimiter: Option<u8>) -> Result<(), Box<dyn std::error::Error>> {
     if path.to_string_lossy().contains("://") {
         return Err(format!("{}: remote files are not supported", path.display()).into());
     }
     let fmt = detect_format(path).map_err(|e| format!("{}: {}", path.display(), e))?;
-    let (total_rows, n_cols, df) = preview(path, &fmt, n, mode, lazy)?;
+    let (total_rows, n_cols, df) = preview(path, &fmt, n, mode, lazy, delimiter)?;
 
     let showing = match mode { Mode::Head => "top", Mode::Tail => "last" };
     let display_n = total_rows.map(|r| n.min(r)).unwrap_or(n);
@@ -122,7 +135,7 @@ fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool, lazy: bool) -> Resu
     Ok(())
 }
 
-fn print_schema(path: &PathBuf, colorize: bool, lazy: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn print_schema(path: &PathBuf, colorize: bool, lazy: bool, delimiter: Option<u8>) -> Result<(), Box<dyn std::error::Error>> {
     if path.to_string_lossy().contains("://") {
         return Err(format!("{}: remote files are not supported", path.display()).into());
     }
@@ -135,7 +148,7 @@ fn print_schema(path: &PathBuf, colorize: bool, lazy: bool) -> Result<(), Box<dy
             let f = std::fs::File::open(path)?;
             let mut reader = ParquetReader::new(f);
             let total_rows = reader.num_rows()?;
-            let mut lf = new_lazy_frame(path, &fmt);
+            let mut lf = new_lazy_frame(path, &fmt, delimiter);
             let schema = lf.collect_schema()?;
             let fields: Vec<(String, String)> = schema.iter()
                 .map(|(name, dtype)| (name.to_string(), format!("{}", dtype)))
@@ -144,7 +157,7 @@ fn print_schema(path: &PathBuf, colorize: bool, lazy: bool) -> Result<(), Box<dy
         }
         Format::Csv if lazy => {
             // fast path: infer from first 100 rows, no row count scan
-            let mut lf = new_lazy_frame(path, &fmt);
+            let mut lf = new_lazy_frame(path, &fmt, delimiter);
             let schema = lf.collect_schema()?;
             let fields: Vec<(String, String)> = schema.iter()
                 .map(|(name, dtype)| (name.to_string(), format!("{}", dtype)))
@@ -153,9 +166,10 @@ fn print_schema(path: &PathBuf, colorize: bool, lazy: bool) -> Result<(), Box<dy
         }
         Format::Csv => {
             // full scan: infer_schema_length(None) for accurate types + count rows
-            let mut lf = LazyCsvReader::new(path.to_str().unwrap().into())
-                .with_infer_schema_length(None)
-                .finish()?;
+            let mut reader = LazyCsvReader::new(path.to_str().unwrap().into())
+                .with_infer_schema_length(None);
+            if let Some(sep) = delimiter { reader = reader.with_separator(sep); }
+            let mut lf = reader.finish()?;
             let schema = lf.collect_schema()?;
             let fields: Vec<(String, String)> = schema.iter()
                 .map(|(name, dtype)| (name.to_string(), format!("{}", dtype)))
@@ -196,13 +210,14 @@ pub fn preview(
     n: usize,
     mode: Mode,
     lazy: bool,
+    delimiter: Option<u8>,
 ) -> Result<(Option<usize>, usize, DataFrame), Box<dyn std::error::Error>> {
     // CSV --lazy: fast path, no full scan/download
     if matches!(fmt, Format::Csv) && lazy {
         match mode {
             Mode::Tail => return Err("CSV tail requires full scan; remove --lazy to enable".into()),
             Mode::Head => {
-                let mut lf = new_lazy_frame(path, fmt);
+                let mut lf = new_lazy_frame(path, fmt, delimiter);
                 let n_cols = lf.collect_schema()?.len();
                 let df = lf.limit(n as u32).collect()?;
                 return Ok((None, n_cols, df));
@@ -219,11 +234,11 @@ pub fn preview(
             let mut reader = ParquetReader::new(f);
             let total_rows = reader.num_rows()?;  // parses + caches footer
             let n_cols = reader.schema()?.len();  // reuses cached footer
-            let lf = new_lazy_frame(path, fmt);
+            let lf = new_lazy_frame(path, fmt, delimiter);
             (n_cols, total_rows, lf)
         }
         Format::Csv => {
-            let mut lf = new_lazy_frame(path, fmt);
+            let mut lf = new_lazy_frame(path, fmt, delimiter);
             let n_cols = lf.collect_schema()?.len();
             let count_df = lf.clone().select([len()]).collect()?;
             let total_rows = count_df.columns()[0].as_materialized_series().u32()?.get(0).unwrap_or(0) as usize;
@@ -242,10 +257,23 @@ pub fn preview(
     Ok((Some(total_rows), n_cols, df))
 }
 
-fn new_lazy_frame(path: &PathBuf, fmt: &Format) -> LazyFrame {
+fn new_lazy_frame(path: &PathBuf, fmt: &Format, delimiter: Option<u8>) -> LazyFrame {
     match fmt {
         Format::Parquet => LazyFrame::scan_parquet(path.to_str().unwrap().into(), ScanArgsParquet::default()).unwrap(),
-        Format::Csv     => LazyCsvReader::new(path.to_str().unwrap().into()).finish().unwrap(),
+        Format::Csv => {
+            let mut r = LazyCsvReader::new(path.to_str().unwrap().into());
+            if let Some(sep) = delimiter { r = r.with_separator(sep); }
+            r.finish().unwrap()
+        }
+    }
+}
+
+fn parse_delimiter_opt(s: Option<&str>) -> Result<Option<u8>, Box<dyn std::error::Error>> {
+    match s {
+        None => Ok(None),
+        Some("\\t") | Some("\t") => Ok(Some(b'\t')),
+        Some(s) if s.len() == 1 => Ok(Some(s.as_bytes()[0])),
+        Some(s) => Err(format!("delimiter must be a single character, got {:?}", s).into()),
     }
 }
 
@@ -267,6 +295,25 @@ mod tests {
 
     fn examples_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")
+    }
+
+    #[test]
+    fn parse_delimiter_values() {
+        assert_eq!(parse_delimiter_opt(None).unwrap(), None);
+        assert_eq!(parse_delimiter_opt(Some(";")).unwrap(), Some(b';'));
+        assert_eq!(parse_delimiter_opt(Some("|")).unwrap(), Some(b'|'));
+        assert_eq!(parse_delimiter_opt(Some("\\t")).unwrap(), Some(b'\t'));
+        assert!(parse_delimiter_opt(Some("ab")).is_err());
+    }
+
+    #[test]
+    fn pipe_delimiter_preview() {
+        let path = examples_dir().join("sample_pipe.csv");
+        let fmt = detect_format(&path).unwrap();
+        let (total, n_cols, df) = preview(&path, &fmt, 5, Mode::Head, false, Some(b'|')).unwrap();
+        assert_eq!(total, Some(3));
+        assert_eq!(n_cols, 3);
+        assert_eq!(df.height(), 3);
     }
 
     #[test]
@@ -300,7 +347,7 @@ mod tests {
     fn head_parquet_row_count() {
         let path = examples_dir().join("titanic.parquet");
         let fmt = detect_format(&path).unwrap();
-        let (total, _, df) = preview(&path, &fmt, 7, Mode::Head, false).unwrap();
+        let (total, _, df) = preview(&path, &fmt, 7, Mode::Head, false, None).unwrap();
         assert_eq!(total, Some(891));
         assert_eq!(df.height(), 7);
     }
@@ -309,7 +356,7 @@ mod tests {
     fn tail_parquet_row_count() {
         let path = examples_dir().join("titanic.parquet");
         let fmt = detect_format(&path).unwrap();
-        let (total, _, df) = preview(&path, &fmt, 7, Mode::Tail, false).unwrap();
+        let (total, _, df) = preview(&path, &fmt, 7, Mode::Tail, false, None).unwrap();
         assert_eq!(total, Some(891));
         assert_eq!(df.height(), 7);
     }
@@ -318,7 +365,7 @@ mod tests {
     fn head_csv_row_count() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
-        let (total, _, df) = preview(&path, &fmt, 10, Mode::Head, false).unwrap();
+        let (total, _, df) = preview(&path, &fmt, 10, Mode::Head, false, None).unwrap();
         assert_eq!(total, Some(150));
         assert_eq!(df.height(), 10);
     }
@@ -327,7 +374,7 @@ mod tests {
     fn tail_csv_row_count() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
-        let (total, _, df) = preview(&path, &fmt, 10, Mode::Tail, false).unwrap();
+        let (total, _, df) = preview(&path, &fmt, 10, Mode::Tail, false, None).unwrap();
         assert_eq!(total, Some(150));
         assert_eq!(df.height(), 10);
     }
@@ -336,7 +383,7 @@ mod tests {
     fn lazy_csv_head_no_row_count() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
-        let (total, _, df) = preview(&path, &fmt, 5, Mode::Head, true).unwrap();
+        let (total, _, df) = preview(&path, &fmt, 5, Mode::Head, true, None).unwrap();
         assert_eq!(total, None);
         assert_eq!(df.height(), 5);
     }
@@ -345,15 +392,15 @@ mod tests {
     fn lazy_csv_tail_errors() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
-        assert!(preview(&path, &fmt, 5, Mode::Tail, true).is_err());
+        assert!(preview(&path, &fmt, 5, Mode::Tail, true, None).is_err());
     }
 
     #[test]
     fn head_and_tail_parquet_differ() {
         let path = examples_dir().join("titanic.parquet");
         let fmt = detect_format(&path).unwrap();
-        let (head_total, _, head) = preview(&path, &fmt, 3, Mode::Head, false).unwrap();
-        let (tail_total, _, tail) = preview(&path, &fmt, 3, Mode::Tail, false).unwrap();
+        let (head_total, _, head) = preview(&path, &fmt, 3, Mode::Head, false, None).unwrap();
+        let (tail_total, _, tail) = preview(&path, &fmt, 3, Mode::Tail, false, None).unwrap();
         assert_eq!(head_total, Some(891));
         assert_eq!(tail_total, Some(891));
         assert_ne!(head.get(0).unwrap(), tail.get(0).unwrap());
@@ -363,8 +410,8 @@ mod tests {
     fn head_and_tail_csv_differ() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
-        let (head_total, _, head) = preview(&path, &fmt, 3, Mode::Head, false).unwrap();
-        let (tail_total, _, tail) = preview(&path, &fmt, 3, Mode::Tail, false).unwrap();
+        let (head_total, _, head) = preview(&path, &fmt, 3, Mode::Head, false, None).unwrap();
+        let (tail_total, _, tail) = preview(&path, &fmt, 3, Mode::Tail, false, None).unwrap();
         assert_eq!(head_total, Some(150));
         assert_eq!(tail_total, Some(150));
         assert_ne!(head.get(0).unwrap(), tail.get(0).unwrap());
