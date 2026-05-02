@@ -2,6 +2,10 @@
 
 Project context and coding conventions for AI assistants working in this repository.
 
+## Agent Rules
+
+- **Do not `git push` without explicit user approval.** Commit and merge locally, then ask before pushing.
+
 ## Project Overview
 
 **dpeek** is a fast CLI tool for previewing CSV and Parquet files. Think `head`/`tail` but data-aware: it shows row counts, column counts, and colorized tabular output.
