@@ -5,6 +5,7 @@ Project context and coding conventions for AI assistants working in this reposit
 ## Agent Rules
 
 - **Do not `git push` without explicit user approval.** Commit and merge locally, then ask before pushing.
+- **Create a new branch for each feature or fix.** Branch off master, implement, then merge back.
 
 ## Project Overview
 
