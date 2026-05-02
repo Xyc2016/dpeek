@@ -20,7 +20,7 @@ struct Cli {
 
     /// Fast mode: skip full CSV scan (CSV head shows no row count, CSV tail is disabled)
     #[arg(long)]
-    lazy: bool,
+    fast: bool,
 
     /// Field separator character (default: comma). Use \t for tab.
     #[arg(short = 'd', long)]
@@ -41,7 +41,7 @@ enum SubCmd {
         n: usize,
         /// Fast mode: skip full CSV scan (CSV tail is disabled with this flag)
         #[arg(long)]
-        lazy: bool,
+        fast: bool,
         /// Field separator character (default: comma). Use \t for tab.
         #[arg(short = 'd', long)]
         delimiter: Option<String>,
@@ -52,7 +52,7 @@ enum SubCmd {
         file: PathBuf,
         /// Fast mode: infer CSV types from first 100 rows only, skip row count scan
         #[arg(long)]
-        lazy: bool,
+        fast: bool,
         /// Field separator character (default: comma). Use \t for tab.
         #[arg(short = 'd', long)]
         delimiter: Option<String>,
@@ -78,13 +78,13 @@ fn main() {
     let colorize = std::io::stdout().is_terminal();
 
     let result = match cli.command {
-        Some(SubCmd::Tail { file, n, lazy, delimiter }) =>
-            parse_delimiter_opt(delimiter.as_deref()).and_then(|sep| run(&file, n, Mode::Tail, colorize, lazy, sep)),
-        Some(SubCmd::Schema { file, lazy, delimiter }) =>
-            parse_delimiter_opt(delimiter.as_deref()).and_then(|sep| print_schema(&file, colorize, lazy, sep)),
+        Some(SubCmd::Tail { file, n, fast, delimiter }) =>
+            parse_delimiter_opt(delimiter.as_deref()).and_then(|sep| run(&file, n, Mode::Tail, colorize, fast, sep)),
+        Some(SubCmd::Schema { file, fast, delimiter }) =>
+            parse_delimiter_opt(delimiter.as_deref()).and_then(|sep| print_schema(&file, colorize, fast, sep)),
         None => match cli.file {
             Some(file) =>
-                parse_delimiter_opt(cli.delimiter.as_deref()).and_then(|sep| run(&file, cli.n, Mode::Head, colorize, cli.lazy, sep)),
+                parse_delimiter_opt(cli.delimiter.as_deref()).and_then(|sep| run(&file, cli.n, Mode::Head, colorize, cli.fast, sep)),
             None => {
                 eprintln!("error: provide a file or subcommand. Try --help");
                 std::process::exit(1);
@@ -98,7 +98,7 @@ fn main() {
     }
 }
 
-fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool, lazy: bool, delimiter: Option<u8>) -> Result<(), Box<dyn std::error::Error>> {
+fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool, fast: bool, delimiter: Option<u8>) -> Result<(), Box<dyn std::error::Error>> {
     if path.to_string_lossy().contains("://") {
         return Err(format!("{}: remote files are not supported", path.display()).into());
     }
@@ -106,7 +106,7 @@ fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool, lazy: bool, delimit
         return Err(format!("{}: no such file", path.display()).into());
     }
     let fmt = detect_format(path).map_err(|e| format!("{}: {}", path.display(), e))?;
-    let (total_rows, n_cols, df) = preview(path, &fmt, n, mode, lazy, delimiter)?;
+    let (total_rows, n_cols, df) = preview(path, &fmt, n, mode, fast, delimiter)?;
 
     let showing = match mode { Mode::Head => "top", Mode::Tail => "last" };
     let display_n = total_rows.map(|r| n.min(r)).unwrap_or(n);
@@ -138,7 +138,7 @@ fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool, lazy: bool, delimit
     Ok(())
 }
 
-fn print_schema(path: &PathBuf, colorize: bool, lazy: bool, delimiter: Option<u8>) -> Result<(), Box<dyn std::error::Error>> {
+fn print_schema(path: &PathBuf, colorize: bool, fast: bool, delimiter: Option<u8>) -> Result<(), Box<dyn std::error::Error>> {
     if path.to_string_lossy().contains("://") {
         return Err(format!("{}: remote files are not supported", path.display()).into());
     }
@@ -161,7 +161,7 @@ fn print_schema(path: &PathBuf, colorize: bool, lazy: bool, delimiter: Option<u8
                 .collect();
             (fields, Some(total_rows), false)
         }
-        Format::Csv if lazy => {
+        Format::Csv if fast => {
             // fast path: infer from first 100 rows, no row count scan
             let mut lf = new_lazy_frame(path, &fmt, delimiter);
             let schema = lf.collect_schema()?;
@@ -215,13 +215,13 @@ pub fn preview(
     fmt: &Format,
     n: usize,
     mode: Mode,
-    lazy: bool,
+    fast: bool,
     delimiter: Option<u8>,
 ) -> Result<(Option<usize>, usize, DataFrame), Box<dyn std::error::Error>> {
-    // CSV --lazy: fast path, no full scan/download
-    if matches!(fmt, Format::Csv) && lazy {
+    // CSV --fast: skip row count scan
+    if matches!(fmt, Format::Csv) && fast {
         match mode {
-            Mode::Tail => return Err("CSV tail requires full scan; remove --lazy to enable".into()),
+            Mode::Tail => return Err("CSV tail requires full scan; remove --fast to enable".into()),
             Mode::Head => {
                 let mut lf = new_lazy_frame(path, fmt, delimiter);
                 let n_cols = lf.collect_schema()?.len();
@@ -386,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn lazy_csv_head_no_row_count() {
+    fn fast_csv_head_no_row_count() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
         let (total, _, df) = preview(&path, &fmt, 5, Mode::Head, true, None).unwrap();
@@ -395,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn lazy_csv_tail_errors() {
+    fn fast_csv_tail_errors() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
         assert!(preview(&path, &fmt, 5, Mode::Tail, true, None).is_err());
