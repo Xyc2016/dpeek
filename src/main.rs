@@ -127,7 +127,7 @@ pub fn preview(
             Mode::Head => {
                 let mut lf = new_lazy_frame(path, fmt);
                 let n_cols = lf.collect_schema()?.len();
-                let df = lf.fetch(n)?;
+                let df = lf.limit(n as u32).collect()?;
                 return Ok((None, n_cols, df));
             }
         }
@@ -148,12 +148,12 @@ pub fn preview(
         }
         Format::Csv => {
             let count_df = lf.clone().select([len()]).collect()?;
-            count_df.get_columns()[0].u32()?.get(0).unwrap_or(0) as usize
+            count_df.columns()[0].as_materialized_series().u32()?.get(0).unwrap_or(0) as usize
         }
     };
 
     let df = match mode {
-        Mode::Head => lf.fetch(n)?,
+        Mode::Head => lf.limit(n as u32).collect()?,
         Mode::Tail => {
             let offset = (total_rows as i64).saturating_sub(n as i64);
             lf.slice(offset, n as u32).collect()?
@@ -164,8 +164,8 @@ pub fn preview(
 
 fn new_lazy_frame(path: &PathBuf, fmt: &Format) -> LazyFrame {
     match fmt {
-        Format::Parquet => LazyFrame::scan_parquet(path, ScanArgsParquet::default()).unwrap(),
-        Format::Csv     => LazyCsvReader::new(path).finish().unwrap(),
+        Format::Parquet => LazyFrame::scan_parquet(path.to_str().unwrap().into(), ScanArgsParquet::default()).unwrap(),
+        Format::Csv     => LazyCsvReader::new(path.to_str().unwrap().into()).finish().unwrap(),
     }
 }
 
