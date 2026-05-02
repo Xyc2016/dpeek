@@ -43,6 +43,9 @@ enum SubCmd {
     Schema {
         /// File to inspect
         file: PathBuf,
+        /// Fast mode: infer CSV types from first 100 rows only, skip row count scan
+        #[arg(long)]
+        lazy: bool,
     },
 }
 
@@ -66,7 +69,7 @@ fn main() {
 
     let result = match cli.command {
         Some(SubCmd::Tail { file, n, lazy }) => run(&file, n, Mode::Tail, colorize, lazy),
-        Some(SubCmd::Schema { file }) => print_schema(&file, colorize),
+        Some(SubCmd::Schema { file, lazy }) => print_schema(&file, colorize, lazy),
         None => match cli.file {
             Some(file) => run(&file, cli.n, Mode::Head, colorize, cli.lazy),
             None => {
@@ -119,53 +122,67 @@ fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool, lazy: bool) -> Resu
     Ok(())
 }
 
-fn print_schema(path: &PathBuf, colorize: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn print_schema(path: &PathBuf, colorize: bool, lazy: bool) -> Result<(), Box<dyn std::error::Error>> {
     if path.to_string_lossy().contains("://") {
         return Err(format!("{}: remote files are not supported", path.display()).into());
     }
     let fmt = detect_format(path).map_err(|e| format!("{}: {}", path.display(), e))?;
 
-    let (fields, inferred) = match fmt {
+    // fields, total_rows (None = unknown), partial (types inferred from sample)
+    let (fields, total_rows, partial) = match fmt {
         Format::Parquet => {
+            // footer parsed once: num_rows() caches it, schema() reuses cache
+            let f = std::fs::File::open(path)?;
+            let mut reader = ParquetReader::new(f);
+            let total_rows = reader.num_rows()?;
             let mut lf = new_lazy_frame(path, &fmt);
             let schema = lf.collect_schema()?;
             let fields: Vec<(String, String)> = schema.iter()
                 .map(|(name, dtype)| (name.to_string(), format!("{}", dtype)))
                 .collect();
-            (fields, false)
+            (fields, Some(total_rows), false)
+        }
+        Format::Csv if lazy => {
+            // fast path: infer from first 100 rows, no row count scan
+            let mut lf = new_lazy_frame(path, &fmt);
+            let schema = lf.collect_schema()?;
+            let fields: Vec<(String, String)> = schema.iter()
+                .map(|(name, dtype)| (name.to_string(), format!("{}", dtype)))
+                .collect();
+            (fields, None, true)
         }
         Format::Csv => {
-            let mut lf = new_lazy_frame(path, &fmt);
+            // full scan: infer_schema_length(None) for accurate types + count rows
+            let mut lf = LazyCsvReader::new(path.to_str().unwrap().into())
+                .with_infer_schema_length(None)
+                .finish()?;
             let schema = lf.collect_schema()?;
             let fields: Vec<(String, String)> = schema.iter()
                 .map(|(name, dtype)| (name.to_string(), format!("{}", dtype)))
                 .collect();
-            (fields, true)
+            let count_df = lf.clone().select([len()]).collect()?;
+            let total_rows = count_df.columns()[0].as_materialized_series().u32()?.get(0).unwrap_or(0) as usize;
+            (fields, Some(total_rows), false)
         }
     };
 
     let n_cols = fields.len();
     let max_name_len = fields.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
 
+    let file_str = path.display().to_string();
+    let row_part = match total_rows {
+        Some(rows) => format!("  {} rows × {} cols", rows, n_cols),
+        None       => format!("  {} cols", n_cols),
+    };
+    let note = if partial { "  (types inferred from first 100 rows)" } else { "" };
+
     if colorize {
-        let header = if inferred {
-            format!("{}  {} cols  (types inferred from first 100 rows)",
-                path.display().to_string().bold(), n_cols)
-        } else {
-            format!("{}  {} cols", path.display().to_string().bold(), n_cols)
-        };
-        println!("{}", header);
+        println!("{}{}{}", file_str.bold(), row_part, note);
         for (name, dtype) in &fields {
             println!("  {:<width$}  {}", name, dtype.dimmed(), width = max_name_len);
         }
     } else {
-        let header = if inferred {
-            format!("{}  {} cols  (types inferred from first 100 rows)",
-                path.display(), n_cols)
-        } else {
-            format!("{}  {} cols", path.display(), n_cols)
-        };
-        println!("{}", header);
+        println!("{}{}{}", file_str, row_part, note);
         for (name, dtype) in &fields {
             println!("  {:<width$}  {}", name, dtype, width = max_name_len);
         }
