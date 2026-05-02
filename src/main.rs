@@ -133,12 +133,25 @@ pub fn preview(
         }
     }
 
-    // Streaming row count (no full materialization) + slice pushdown for data.
-    // Works for both CSV and Parquet, local and remote.
     let mut lf = new_lazy_frame(path, fmt);
     let n_cols = lf.collect_schema()?.len();
-    let count_df = lf.clone().select([len()]).collect()?;
-    let total_rows = count_df.get_columns()[0].u32()?.get(0).unwrap_or(0) as usize;
+
+    // Row count strategy:
+    // - Parquet: ParquetReader::num_rows() reads only the footer (O(1), no data scan).
+    //   select([len()]).collect() looks equivalent but Polars 0.52+ removed the fast-count
+    //   optimization for Parquet — it falls back to a full file scan.
+    // - CSV: select([len()]).collect() is fine; Polars uses a fast metadata path for CSV.
+    let total_rows: usize = match fmt {
+        Format::Parquet => {
+            let f = std::fs::File::open(path)?;
+            ParquetReader::new(f).num_rows()?
+        }
+        Format::Csv => {
+            let count_df = lf.clone().select([len()]).collect()?;
+            count_df.get_columns()[0].u32()?.get(0).unwrap_or(0) as usize
+        }
+    };
+
     let df = match mode {
         Mode::Head => lf.fetch(n)?,
         Mode::Tail => {
