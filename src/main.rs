@@ -39,6 +39,11 @@ enum SubCmd {
         #[arg(long)]
         lazy: bool,
     },
+    /// Show column names and types without loading data
+    Schema {
+        /// File to inspect
+        file: PathBuf,
+    },
 }
 
 fn help_styles() -> Styles {
@@ -61,6 +66,7 @@ fn main() {
 
     let result = match cli.command {
         Some(SubCmd::Tail { file, n, lazy }) => run(&file, n, Mode::Tail, colorize, lazy),
+        Some(SubCmd::Schema { file }) => print_schema(&file, colorize),
         None => match cli.file {
             Some(file) => run(&file, cli.n, Mode::Head, colorize, cli.lazy),
             None => {
@@ -109,6 +115,60 @@ fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool, lazy: bool) -> Resu
         println!("{}", rich_highlight(&text));
     } else {
         println!("{}", text);
+    }
+    Ok(())
+}
+
+fn print_schema(path: &PathBuf, colorize: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if path.to_string_lossy().contains("://") {
+        return Err(format!("{}: remote files are not supported", path.display()).into());
+    }
+    let fmt = detect_format(path).map_err(|e| format!("{}: {}", path.display(), e))?;
+
+    let (fields, inferred) = match fmt {
+        Format::Parquet => {
+            let mut lf = new_lazy_frame(path, &fmt);
+            let schema = lf.collect_schema()?;
+            let fields: Vec<(String, String)> = schema.iter()
+                .map(|(name, dtype)| (name.to_string(), format!("{}", dtype)))
+                .collect();
+            (fields, false)
+        }
+        Format::Csv => {
+            let mut lf = new_lazy_frame(path, &fmt);
+            let schema = lf.collect_schema()?;
+            let fields: Vec<(String, String)> = schema.iter()
+                .map(|(name, dtype)| (name.to_string(), format!("{}", dtype)))
+                .collect();
+            (fields, true)
+        }
+    };
+
+    let n_cols = fields.len();
+    let max_name_len = fields.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
+
+    if colorize {
+        let header = if inferred {
+            format!("{}  {} cols  (types inferred from first 100 rows)",
+                path.display().to_string().bold(), n_cols)
+        } else {
+            format!("{}  {} cols", path.display().to_string().bold(), n_cols)
+        };
+        println!("{}", header);
+        for (name, dtype) in &fields {
+            println!("  {:<width$}  {}", name, dtype.dimmed(), width = max_name_len);
+        }
+    } else {
+        let header = if inferred {
+            format!("{}  {} cols  (types inferred from first 100 rows)",
+                path.display(), n_cols)
+        } else {
+            format!("{}  {} cols", path.display(), n_cols)
+        };
+        println!("{}", header);
+        for (name, dtype) in &fields {
+            println!("  {:<width$}  {}", name, dtype, width = max_name_len);
+        }
     }
     Ok(())
 }
