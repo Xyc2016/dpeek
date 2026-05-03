@@ -2,6 +2,12 @@
 name = "dpeek"
 version = "0.1.0"
 edition = "2021"
+description = "Extremely fast CLI tool for previewing CSV and Parquet files — like head/tail but data-aware"
+keywords = ["parquet", "csv", "cli", "data", "preview"]
+categories = ["command-line-utilities", "development-tools"]
+license = "MIT"
+repository = "https://github.com/xyc/dpeek"
+readme = "README.md"
 
 [dependencies]
 polars = { version = "0.53", features = ["parquet", "csv", "lazy", "timezones", "cloud"] }
