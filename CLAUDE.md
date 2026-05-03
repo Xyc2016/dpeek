@@ -22,14 +22,29 @@ Project context and coding conventions for AI assistants working in this reposit
 dpeek file.parquet           # head 5 rows
 dpeek -n 20 file.csv         # head 20 rows
 dpeek tail file.parquet      # tail 5 rows
-dpeek --lazy file.csv        # skip row count scan (fast path)
+dpeek --fast file.csv        # skip full scan (fast path)
 ```
+
+**Target users:** data engineers and data scientists who need to quickly inspect CSV and Parquet files without loading them into a notebook or REPL.
+
+## Benchmark Test Files
+
+Preferred files for performance testing and README benchmarks:
+
+| File | Size | Purpose |
+|------|----|--------|
+| `examples/titanic.parquet` | 11KB | small Parquet, fast smoke test |
+| `examples/iris.csv` | 4KB | small CSV, fast smoke test |
+| `local/data/yellow_tripdata_2015-01.parquet` | 167MB | large Parquet, real-world perf |
+| `local/data/yellow_tripdata_2015-01.csv` | 1.8GB | large CSV, real-world perf |
+
+Note: `local/` is gitignored. Files must be present locally to run benchmarks.
 
 ## Build & Test
 
 ```bash
 cargo build --release          # release binary → target/release/dpeek
-cargo test                     # 13 unit tests
+cargo test                     # unit tests (currently 23)
 cargo test --release           # run tests with optimizations
 ```
 
