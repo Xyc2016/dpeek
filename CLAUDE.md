@@ -6,6 +6,7 @@ Project context and coding conventions for AI assistants working in this reposit
 
 - **Do not `git push` without explicit user approval.** Commit and merge locally, then ask before pushing.
 - **Create a new branch for every feat/fix.** Branch off master, implement, commit, then merge back. Never commit directly to master.
+- **Merge with `--ff-only`.** Always attempt `git merge --ff-only`. If fast-forward is not possible, stop and ask the user how to proceed.
 - **Follow Polars ecosystem conventions.** Feature design should match Polars user intuition: 0-based indexing, hard errors on unknown column names (`ColumnNotFoundError` style), silent clamp on range overflow (Rust/Python slice semantics), etc.
 
 ## Design Principles
