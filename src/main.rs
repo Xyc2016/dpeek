@@ -22,6 +22,10 @@ struct Cli {
     #[arg(long)]
     fast: bool,
 
+    /// Columns to show: names (col1,col2) or 0-based range (0:5)
+    #[arg(short = 'c', long)]
+    cols: Option<String>,
+
     /// Field separator character (default: comma). Use \t for tab.
     #[arg(short = 'd', long)]
     delimiter: Option<String>,
@@ -42,6 +46,9 @@ enum SubCmd {
         /// Fast mode: skip full CSV scan (CSV tail is disabled with this flag)
         #[arg(long)]
         fast: bool,
+        /// Columns to show: names (col1,col2) or 0-based range (0:5)
+        #[arg(short = 'c', long)]
+        cols: Option<String>,
         /// Field separator character (default: comma). Use \t for tab.
         #[arg(short = 'd', long)]
         delimiter: Option<String>,
@@ -78,13 +85,13 @@ fn main() {
     let colorize = std::io::stdout().is_terminal();
 
     let result = match cli.command {
-        Some(SubCmd::Tail { file, n, fast, delimiter }) =>
-            parse_delimiter_opt(delimiter.as_deref()).and_then(|sep| run(&file, n, Mode::Tail, colorize, fast, sep)),
+        Some(SubCmd::Tail { file, n, fast, cols, delimiter }) =>
+            parse_delimiter_opt(delimiter.as_deref()).and_then(|sep| run(&file, n, Mode::Tail, colorize, fast, cols.as_deref(), sep)),
         Some(SubCmd::Schema { file, fast, delimiter }) =>
             parse_delimiter_opt(delimiter.as_deref()).and_then(|sep| print_schema(&file, colorize, fast, sep)),
         None => match cli.file {
             Some(file) =>
-                parse_delimiter_opt(cli.delimiter.as_deref()).and_then(|sep| run(&file, cli.n, Mode::Head, colorize, cli.fast, sep)),
+                parse_delimiter_opt(cli.delimiter.as_deref()).and_then(|sep| run(&file, cli.n, Mode::Head, colorize, cli.fast, cli.cols.as_deref(), sep)),
             None => {
                 eprintln!("error: provide a file or subcommand. Try --help");
                 std::process::exit(1);
@@ -98,7 +105,7 @@ fn main() {
     }
 }
 
-fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool, fast: bool, delimiter: Option<u8>) -> Result<(), Box<dyn std::error::Error>> {
+fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool, fast: bool, cols: Option<&str>, delimiter: Option<u8>) -> Result<(), Box<dyn std::error::Error>> {
     if path.to_string_lossy().contains("://") {
         return Err(format!("{}: remote files are not supported", path.display()).into());
     }
@@ -106,26 +113,27 @@ fn run(path: &PathBuf, n: usize, mode: Mode, colorize: bool, fast: bool, delimit
         return Err(format!("{}: no such file", path.display()).into());
     }
     let fmt = detect_format(path).map_err(|e| format!("{}: {}", path.display(), e))?;
-    let (total_rows, n_cols, df) = preview(path, &fmt, n, mode, fast, delimiter)?;
+    let (total_rows, total_cols, sel_cols, df) = preview(path, &fmt, n, mode, fast, cols, delimiter)?;
 
     let showing = match mode { Mode::Head => "top", Mode::Tail => "last" };
     let display_n = total_rows.map(|r| n.min(r)).unwrap_or(n);
+    let col_note = if sel_cols < total_cols { format!(", {} cols", sel_cols) } else { String::new() };
 
     if colorize {
         if let Some(rows) = total_rows {
-            println!("{}  {} rows × {} cols  (showing {} {})",
-                path.display().to_string().bold(), rows, n_cols, showing, display_n);
+            println!("{}  {} rows × {} cols  (showing {} {}{})",
+                path.display().to_string().bold(), rows, total_cols, showing, display_n, col_note);
         } else {
-            println!("{}  {} cols  (showing {} {})",
-                path.display().to_string().bold(), n_cols, showing, display_n);
+            println!("{}  {} cols  (showing {} {}{})",
+                path.display().to_string().bold(), total_cols, showing, display_n, col_note);
         }
     } else {
         if let Some(rows) = total_rows {
-            println!("{}  {} rows × {} cols  (showing {} {})",
-                path.display(), rows, n_cols, showing, display_n);
+            println!("{}  {} rows × {} cols  (showing {} {}{})",
+                path.display(), rows, total_cols, showing, display_n, col_note);
         } else {
-            println!("{}  {} cols  (showing {} {})",
-                path.display(), n_cols, showing, display_n);
+            println!("{}  {} cols  (showing {} {}{})",
+                path.display(), total_cols, showing, display_n, col_note);
         }
     }
 
@@ -216,41 +224,52 @@ pub fn preview(
     n: usize,
     mode: Mode,
     fast: bool,
+    cols: Option<&str>,
     delimiter: Option<u8>,
-) -> Result<(Option<usize>, usize, DataFrame), Box<dyn std::error::Error>> {
+) -> Result<(Option<usize>, usize, usize, DataFrame), Box<dyn std::error::Error>> {
     // CSV --fast: skip row count scan
     if matches!(fmt, Format::Csv) && fast {
         match mode {
             Mode::Tail => return Err("CSV tail requires full scan; remove --fast to enable".into()),
             Mode::Head => {
                 let mut lf = new_lazy_frame(path, fmt, delimiter);
-                let n_cols = lf.collect_schema()?.len();
-                let df = lf.limit(n as u32).collect()?;
-                return Ok((None, n_cols, df));
+                let schema = lf.collect_schema()?;
+                let total_cols = schema.len();
+                let col_names = resolve_cols(cols, &schema)?;
+                let sel_cols = col_names.len();
+                let df = lf.select(col_names.iter().map(|s| col(s.as_str())).collect::<Vec<_>>())
+                    .limit(n as u32).collect()?;
+                return Ok((None, total_cols, sel_cols, df));
             }
         }
     }
 
-    // Parquet: open once, parse footer once → get both schema (n_cols) and row count.
-    // This avoids a duplicate footer parse that collect_schema() would cause.
+    // Parquet: open once, parse footer once → get both schema and row count.
     // CSV: still needs collect_schema() + select([len()]) via LazyFrame.
-    let (n_cols, total_rows, lf) = match fmt {
+    let (all_cols, total_rows, total_cols, lf) = match fmt {
         Format::Parquet => {
             let f = std::fs::File::open(path)?;
             let mut reader = ParquetReader::new(f);
             let total_rows = reader.num_rows()?;  // parses + caches footer
-            let n_cols = reader.schema()?.len();  // reuses cached footer
-            let lf = new_lazy_frame(path, fmt, delimiter);
-            (n_cols, total_rows, lf)
+            let mut lf = new_lazy_frame(path, fmt, delimiter);
+            let schema = lf.collect_schema()?;
+            let total_cols = schema.len();
+            let col_names = resolve_cols(cols, &schema)?;
+            (col_names, total_rows, total_cols, lf)
         }
         Format::Csv => {
             let mut lf = new_lazy_frame(path, fmt, delimiter);
-            let n_cols = lf.collect_schema()?.len();
+            let schema = lf.collect_schema()?;
+            let total_cols = schema.len();
+            let col_names = resolve_cols(cols, &schema)?;
             let count_df = lf.clone().select([len()]).collect()?;
             let total_rows = count_df.columns()[0].as_materialized_series().u32()?.get(0).unwrap_or(0) as usize;
-            (n_cols, total_rows, lf)
+            (col_names, total_rows, total_cols, lf)
         }
     };
+
+    let sel_cols = all_cols.len();
+    let lf = lf.select(all_cols.iter().map(|s| col(s.as_str())).collect::<Vec<_>>());
 
     let df = match mode {
         Mode::Head => lf.limit(n as u32).collect()?,
@@ -260,7 +279,7 @@ pub fn preview(
         }
     };
 
-    Ok((Some(total_rows), n_cols, df))
+    Ok((Some(total_rows), total_cols, sel_cols, df))
 }
 
 fn new_lazy_frame(path: &PathBuf, fmt: &Format, delimiter: Option<u8>) -> LazyFrame {
@@ -282,6 +301,53 @@ fn parse_delimiter_opt(s: Option<&str>) -> Result<Option<u8>, Box<dyn std::error
         Some(s) => Err(format!("delimiter must be a single character, got {:?}", s).into()),
     }
 }
+
+/// Resolve -c/--cols spec into an ordered list of column names.
+/// - None   → all columns (in schema order)
+/// - "a,b" → name list; unknown names → hard error listing all missing columns
+/// - "0:5" → 0-based range [0,5), silently clamped; empty after clamping → error
+/// - "5:"  → from index 5 to end  |  ":5" → from index 0 to 5
+fn resolve_cols(cols: Option<&str>, schema: &Schema) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let all: Vec<String> = schema.iter_names().map(|s| s.to_string()).collect();
+    let spec = match cols {
+        None => return Ok(all),
+        Some(s) => s,
+    };
+
+    // Range syntax: contains ':', both sides must be empty or valid integers
+    if spec.contains(':') {
+        let (lhs, rhs) = spec.split_once(':').unwrap();
+        let start_res = if lhs.trim().is_empty() { Ok(0usize) } else { lhs.trim().parse::<usize>() };
+        let end_res   = if rhs.trim().is_empty() { Ok(all.len()) } else { rhs.trim().parse::<usize>() };
+        if let (Ok(start), Ok(end)) = (start_res, end_res) {
+            let start = start.min(all.len());
+            let end   = end.min(all.len());
+            if start >= end {
+                return Err(format!(
+                    "column range {}:{} is empty (file has {} columns)",
+                    lhs.trim(), rhs.trim(), all.len()
+                ).into());
+            }
+            return Ok(all[start..end].to_vec());
+        }
+    }
+
+    // Name list: collect all unknown names and report together
+    let names: Vec<String> = spec.split(',').map(|s| s.trim().to_string()).collect();
+    let missing: Vec<&str> = names.iter()
+        .filter(|n| !schema.contains(n.as_str()))
+        .map(|n| n.as_str())
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "column{} not found: {}",
+            if missing.len() == 1 { "" } else { "s" },
+            missing.iter().map(|n| format!("{:?}", n)).collect::<Vec<_>>().join(", ")
+        ).into());
+    }
+    Ok(names)
+}
+
 
 pub enum Format { Parquet, Csv }
 
@@ -316,7 +382,7 @@ mod tests {
     fn pipe_delimiter_preview() {
         let path = examples_dir().join("sample_pipe.csv");
         let fmt = detect_format(&path).unwrap();
-        let (total, n_cols, df) = preview(&path, &fmt, 5, Mode::Head, false, Some(b'|')).unwrap();
+        let (total, _, n_cols, df) = preview(&path, &fmt, 5, Mode::Head, false, None, Some(b'|')).unwrap();
         assert_eq!(total, Some(3));
         assert_eq!(n_cols, 3);
         assert_eq!(df.height(), 3);
@@ -353,7 +419,7 @@ mod tests {
     fn head_parquet_row_count() {
         let path = examples_dir().join("titanic.parquet");
         let fmt = detect_format(&path).unwrap();
-        let (total, _, df) = preview(&path, &fmt, 7, Mode::Head, false, None).unwrap();
+        let (total, _, _, df) = preview(&path, &fmt, 7, Mode::Head, false, None, None).unwrap();
         assert_eq!(total, Some(891));
         assert_eq!(df.height(), 7);
     }
@@ -362,7 +428,7 @@ mod tests {
     fn tail_parquet_row_count() {
         let path = examples_dir().join("titanic.parquet");
         let fmt = detect_format(&path).unwrap();
-        let (total, _, df) = preview(&path, &fmt, 7, Mode::Tail, false, None).unwrap();
+        let (total, _, _, df) = preview(&path, &fmt, 7, Mode::Tail, false, None, None).unwrap();
         assert_eq!(total, Some(891));
         assert_eq!(df.height(), 7);
     }
@@ -371,7 +437,7 @@ mod tests {
     fn head_csv_row_count() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
-        let (total, _, df) = preview(&path, &fmt, 10, Mode::Head, false, None).unwrap();
+        let (total, _, _, df) = preview(&path, &fmt, 10, Mode::Head, false, None, None).unwrap();
         assert_eq!(total, Some(150));
         assert_eq!(df.height(), 10);
     }
@@ -380,7 +446,7 @@ mod tests {
     fn tail_csv_row_count() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
-        let (total, _, df) = preview(&path, &fmt, 10, Mode::Tail, false, None).unwrap();
+        let (total, _, _, df) = preview(&path, &fmt, 10, Mode::Tail, false, None, None).unwrap();
         assert_eq!(total, Some(150));
         assert_eq!(df.height(), 10);
     }
@@ -389,7 +455,7 @@ mod tests {
     fn fast_csv_head_no_row_count() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
-        let (total, _, df) = preview(&path, &fmt, 5, Mode::Head, true, None).unwrap();
+        let (total, _, _, df) = preview(&path, &fmt, 5, Mode::Head, true, None, None).unwrap();
         assert_eq!(total, None);
         assert_eq!(df.height(), 5);
     }
@@ -398,15 +464,15 @@ mod tests {
     fn fast_csv_tail_errors() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
-        assert!(preview(&path, &fmt, 5, Mode::Tail, true, None).is_err());
+        assert!(preview(&path, &fmt, 5, Mode::Tail, true, None, None).is_err());
     }
 
     #[test]
     fn head_and_tail_parquet_differ() {
         let path = examples_dir().join("titanic.parquet");
         let fmt = detect_format(&path).unwrap();
-        let (head_total, _, head) = preview(&path, &fmt, 3, Mode::Head, false, None).unwrap();
-        let (tail_total, _, tail) = preview(&path, &fmt, 3, Mode::Tail, false, None).unwrap();
+        let (head_total, _, _, head) = preview(&path, &fmt, 3, Mode::Head, false, None, None).unwrap();
+        let (tail_total, _, _, tail) = preview(&path, &fmt, 3, Mode::Tail, false, None, None).unwrap();
         assert_eq!(head_total, Some(891));
         assert_eq!(tail_total, Some(891));
         assert_ne!(head.get(0).unwrap(), tail.get(0).unwrap());
@@ -416,10 +482,75 @@ mod tests {
     fn head_and_tail_csv_differ() {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
-        let (head_total, _, head) = preview(&path, &fmt, 3, Mode::Head, false, None).unwrap();
-        let (tail_total, _, tail) = preview(&path, &fmt, 3, Mode::Tail, false, None).unwrap();
+        let (head_total, _, _, head) = preview(&path, &fmt, 3, Mode::Head, false, None, None).unwrap();
+        let (tail_total, _, _, tail) = preview(&path, &fmt, 3, Mode::Tail, false, None, None).unwrap();
         assert_eq!(head_total, Some(150));
         assert_eq!(tail_total, Some(150));
         assert_ne!(head.get(0).unwrap(), tail.get(0).unwrap());
+    }
+
+    #[test]
+    fn col_select_by_name() {
+        let path = examples_dir().join("iris.csv");
+        let fmt = detect_format(&path).unwrap();
+        let (_, _, n_cols, df) = preview(&path, &fmt, 3, Mode::Head, false, Some("sepal_length,petal_length"), None).unwrap();
+        assert_eq!(n_cols, 2);
+        assert_eq!(df.get_column_names(), vec!["sepal_length", "petal_length"]);
+    }
+
+    #[test]
+    fn col_select_by_range() {
+        let path = examples_dir().join("iris.csv");
+        let fmt = detect_format(&path).unwrap();
+        let (_, _, n_cols, _) = preview(&path, &fmt, 3, Mode::Head, false, Some("0:2"), None).unwrap();
+        assert_eq!(n_cols, 2);
+    }
+
+    #[test]
+    fn col_select_range_clamps() {
+        let path = examples_dir().join("iris.csv");
+        let fmt = detect_format(&path).unwrap();
+        // iris has 5 columns; requesting 0:100 should clamp to all 5
+        let (_, _, n_cols, _) = preview(&path, &fmt, 3, Mode::Head, false, Some("0:100"), None).unwrap();
+        assert_eq!(n_cols, 5);
+    }
+
+    #[test]
+    fn col_select_unknown_name_errors() {
+        let path = examples_dir().join("iris.csv");
+        let fmt = detect_format(&path).unwrap();
+        let result = preview(&path, &fmt, 3, Mode::Head, false, Some("nonexistent_col"), None);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("column not found"), "unexpected error: {}", msg);
+    }
+    #[test]
+    fn col_select_multiple_unknown_names_reported() {
+        let path = examples_dir().join("iris.csv");
+        let fmt = detect_format(&path).unwrap();
+        let result = preview(&path, &fmt, 3, Mode::Head, false, Some("foo,sepal_length,bar"), None);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("foo") && msg.contains("bar"), "unexpected error: {}", msg);
+    }
+
+    #[test]
+    fn col_select_open_ended_range() {
+        let path = examples_dir().join("iris.csv");
+        let fmt = detect_format(&path).unwrap();
+        // iris has 5 cols; "2:" -> cols 2,3,4 (3 cols)
+        let (_, _, n_cols, _) = preview(&path, &fmt, 3, Mode::Head, false, Some("2:"), None).unwrap();
+        assert_eq!(n_cols, 3);
+    }
+
+    #[test]
+    fn col_select_empty_range_errors() {
+        let path = examples_dir().join("titanic.parquet");
+        let fmt = detect_format(&path).unwrap();
+        // titanic has fewer than 20 cols, so 15:20 clamps to empty
+        let result = preview(&path, &fmt, 3, Mode::Head, false, Some("15:20"), None);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("empty"), "unexpected error: {}", msg);
     }
 }
