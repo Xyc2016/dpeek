@@ -158,7 +158,8 @@ fn print_schema(path: &PathBuf, colorize: bool, fast: bool, delimiter: Option<u8
     // fields, total_rows (None = unknown), partial (types inferred from sample)
     let (fields, total_rows, partial) = match fmt {
         Format::Parquet => {
-            // footer parsed once: num_rows() caches it, schema() reuses cache
+            // num_rows() reads footer; collect_schema() via LazyFrame is a separate read.
+            // Two reads are unavoidable here since we need Polars DataType for display.
             let f = std::fs::File::open(path)?;
             let mut reader = ParquetReader::new(f);
             let total_rows = reader.num_rows()?;
@@ -234,8 +235,9 @@ pub fn preview(
             Mode::Head => {
                 let mut lf = new_lazy_frame(path, fmt, delimiter);
                 let schema = lf.collect_schema()?;
-                let total_cols = schema.len();
-                let col_names = resolve_cols(cols, &schema)?;
+                let all_names: Vec<String> = schema.iter_names().map(|s| s.to_string()).collect();
+                let total_cols = all_names.len();
+                let col_names = resolve_cols(cols, &all_names)?;
                 let sel_cols = col_names.len();
                 let df = lf.select(col_names.iter().map(|s| col(s.as_str())).collect::<Vec<_>>())
                     .limit(n as u32).collect()?;
@@ -251,17 +253,19 @@ pub fn preview(
             let f = std::fs::File::open(path)?;
             let mut reader = ParquetReader::new(f);
             let total_rows = reader.num_rows()?;  // parses + caches footer
-            let mut lf = new_lazy_frame(path, fmt, delimiter);
-            let schema = lf.collect_schema()?;
-            let total_cols = schema.len();
-            let col_names = resolve_cols(cols, &schema)?;
+            let arrow_schema = reader.schema()?;  // reuses cached footer — no second read
+            let all_names: Vec<String> = arrow_schema.iter_values().map(|f| f.name.to_string()).collect();
+            let total_cols = all_names.len();
+            let col_names = resolve_cols(cols, &all_names)?;
+            let lf = new_lazy_frame(path, fmt, delimiter);
             (col_names, total_rows, total_cols, lf)
         }
         Format::Csv => {
             let mut lf = new_lazy_frame(path, fmt, delimiter);
             let schema = lf.collect_schema()?;
-            let total_cols = schema.len();
-            let col_names = resolve_cols(cols, &schema)?;
+            let all_names: Vec<String> = schema.iter_names().map(|s| s.to_string()).collect();
+            let total_cols = all_names.len();
+            let col_names = resolve_cols(cols, &all_names)?;
             let count_df = lf.clone().select([len()]).collect()?;
             let total_rows = count_df.columns()[0].as_materialized_series().u32()?.get(0).unwrap_or(0) as usize;
             (col_names, total_rows, total_cols, lf)
@@ -307,10 +311,9 @@ fn parse_delimiter_opt(s: Option<&str>) -> Result<Option<u8>, Box<dyn std::error
 /// - "a,b" → name list; unknown names → hard error listing all missing columns
 /// - "0:5" → 0-based range [0,5), silently clamped; empty after clamping → error
 /// - "5:"  → from index 5 to end  |  ":5" → from index 0 to 5
-fn resolve_cols(cols: Option<&str>, schema: &Schema) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let all: Vec<String> = schema.iter_names().map(|s| s.to_string()).collect();
+fn resolve_cols(cols: Option<&str>, all: &[String]) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let spec = match cols {
-        None => return Ok(all),
+        None => return Ok(all.to_vec()),
         Some(s) => s,
     };
 
@@ -333,9 +336,10 @@ fn resolve_cols(cols: Option<&str>, schema: &Schema) -> Result<Vec<String>, Box<
     }
 
     // Name list: collect all unknown names and report together
+    let name_set: std::collections::HashSet<&str> = all.iter().map(|s| s.as_str()).collect();
     let names: Vec<String> = spec.split(',').map(|s| s.trim().to_string()).collect();
     let missing: Vec<&str> = names.iter()
-        .filter(|n| !schema.contains(n.as_str()))
+        .filter(|n| !name_set.contains(n.as_str()))
         .map(|n| n.as_str())
         .collect();
     if !missing.is_empty() {
