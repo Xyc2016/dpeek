@@ -274,7 +274,7 @@ pub fn preview(
     let df = match mode {
         Mode::Head => lf.limit(n as u32).collect()?,
         Mode::Tail => {
-            let offset = (total_rows as i64).saturating_sub(n as i64);
+            let offset = ((total_rows as i64) - (n as i64)).max(0);
             lf.slice(offset, n as u32).collect()?
         }
     };
@@ -465,6 +465,16 @@ mod tests {
         let path = examples_dir().join("iris.csv");
         let fmt = detect_format(&path).unwrap();
         assert!(preview(&path, &fmt, 5, Mode::Tail, true, None, None).is_err());
+    }
+
+    #[test]
+    fn tail_n_larger_than_row_count_returns_all_rows() {
+        let path = examples_dir().join("iris.csv");
+        let fmt = detect_format(&path).unwrap();
+        // iris has 150 rows; requesting 200 should return all 150
+        let (total, _, _, df) = preview(&path, &fmt, 200, Mode::Tail, false, None, None).unwrap();
+        assert_eq!(total, Some(150));
+        assert_eq!(df.height(), 150);
     }
 
     #[test]
