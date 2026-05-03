@@ -18,7 +18,7 @@ struct Cli {
     #[arg(short = 'n', default_value = "5")]
     n: usize,
 
-    /// Fast mode: skip full CSV scan (CSV head shows no row count, CSV tail is disabled)
+    /// Fast mode: skip full CSV scan; type inference uses first 100 rows only, no row count, CSV tail disabled
     #[arg(long)]
     fast: bool,
 
@@ -43,7 +43,7 @@ enum SubCmd {
         /// Number of rows to show
         #[arg(short = 'n', default_value = "5")]
         n: usize,
-        /// Fast mode: skip full CSV scan (CSV tail is disabled with this flag)
+        /// Fast mode: skip full CSV scan; type inference uses first 100 rows only, CSV tail disabled
         #[arg(long)]
         fast: bool,
         /// Columns to show: names (col1,col2) or 0-based range (0:5)
@@ -163,7 +163,7 @@ fn print_schema(path: &PathBuf, colorize: bool, fast: bool, delimiter: Option<u8
             let f = std::fs::File::open(path)?;
             let mut reader = ParquetReader::new(f);
             let total_rows = reader.num_rows()?;
-            let mut lf = new_lazy_frame(path, &fmt, delimiter);
+            let mut lf = new_lazy_frame(path, &fmt, delimiter, false);
             let schema = lf.collect_schema()?;
             let fields: Vec<(String, String)> = schema.iter()
                 .map(|(name, dtype)| (name.to_string(), format!("{}", dtype)))
@@ -171,8 +171,8 @@ fn print_schema(path: &PathBuf, colorize: bool, fast: bool, delimiter: Option<u8
             (fields, Some(total_rows), false)
         }
         Format::Csv if fast => {
-            // fast path: infer from first 100 rows, no row count scan
-            let mut lf = new_lazy_frame(path, &fmt, delimiter);
+            // fast path: infer from first 100 rows only, no row count scan
+            let mut lf = new_lazy_frame(path, &fmt, delimiter, false);
             let schema = lf.collect_schema()?;
             let fields: Vec<(String, String)> = schema.iter()
                 .map(|(name, dtype)| (name.to_string(), format!("{}", dtype)))
@@ -180,11 +180,8 @@ fn print_schema(path: &PathBuf, colorize: bool, fast: bool, delimiter: Option<u8
             (fields, None, true)
         }
         Format::Csv => {
-            // full scan: infer_schema_length(None) for accurate types + count rows
-            let mut reader = LazyCsvReader::new(path.to_str().unwrap().into())
-                .with_infer_schema_length(None);
-            if let Some(sep) = delimiter { reader = reader.with_separator(sep); }
-            let mut lf = reader.finish()?;
+            // default accurate mode: infer_full=true + count rows
+            let mut lf = new_lazy_frame(path, &fmt, delimiter, true);
             let schema = lf.collect_schema()?;
             let fields: Vec<(String, String)> = schema.iter()
                 .map(|(name, dtype)| (name.to_string(), format!("{}", dtype)))
@@ -233,7 +230,7 @@ pub fn preview(
         match mode {
             Mode::Tail => return Err("CSV tail requires full scan; remove --fast to enable".into()),
             Mode::Head => {
-                let mut lf = new_lazy_frame(path, fmt, delimiter);
+                let mut lf = new_lazy_frame(path, fmt, delimiter, false);
                 let schema = lf.collect_schema()?;
                 let all_names: Vec<String> = schema.iter_names().map(|s| s.to_string()).collect();
                 let total_cols = all_names.len();
@@ -257,11 +254,12 @@ pub fn preview(
             let all_names: Vec<String> = arrow_schema.iter_values().map(|f| f.name.to_string()).collect();
             let total_cols = all_names.len();
             let col_names = resolve_cols(cols, &all_names)?;
-            let lf = new_lazy_frame(path, fmt, delimiter);
+            let lf = new_lazy_frame(path, fmt, delimiter, false);
             (col_names, total_rows, total_cols, lf)
         }
         Format::Csv => {
-            let mut lf = new_lazy_frame(path, fmt, delimiter);
+            // infer_full=true: scan all rows for type inference (default accurate mode)
+            let mut lf = new_lazy_frame(path, fmt, delimiter, true);
             let schema = lf.collect_schema()?;
             let all_names: Vec<String> = schema.iter_names().map(|s| s.to_string()).collect();
             let total_cols = all_names.len();
@@ -286,12 +284,13 @@ pub fn preview(
     Ok((Some(total_rows), total_cols, sel_cols, df))
 }
 
-fn new_lazy_frame(path: &PathBuf, fmt: &Format, delimiter: Option<u8>) -> LazyFrame {
+fn new_lazy_frame(path: &PathBuf, fmt: &Format, delimiter: Option<u8>, infer_full: bool) -> LazyFrame {
     match fmt {
         Format::Parquet => LazyFrame::scan_parquet(path.to_str().unwrap().into(), ScanArgsParquet::default()).unwrap(),
         Format::Csv => {
             let mut r = LazyCsvReader::new(path.to_str().unwrap().into());
             if let Some(sep) = delimiter { r = r.with_separator(sep); }
+            if infer_full { r = r.with_infer_schema_length(None); }
             r.finish().unwrap()
         }
     }
