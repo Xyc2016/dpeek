@@ -5,8 +5,13 @@ Project context and coding conventions for AI assistants working in this reposit
 ## Agent Rules
 
 - **Do not `git push` without explicit user approval.** Commit and merge locally, then ask before pushing.
-- **Create a new branch for each feature or fix.** Branch off master, implement, then merge back.
+- **Create a new branch for every feat/fix.** Branch off master, implement, commit, then merge back. Never commit directly to master.
 - **Follow Polars ecosystem conventions.** Feature design should match Polars user intuition: 0-based indexing, hard errors on unknown column names (`ColumnNotFoundError` style), silent clamp on range overflow (Rust/Python slice semantics), etc.
+
+## Design Principles
+
+- **Default to accuracy.** The default mode always produces correct results (full scan, full type inference).
+- **`--fast` trades accuracy for speed.** With `--fast`: CSV type inference uses only the first 100 rows, row count is skipped, and CSV tail is disabled. Users opt in knowingly.
 
 ## Project Overview
 
