@@ -105,16 +105,20 @@ Measured on Apple M4, macOS, release build:
 
 | File type | Total time |
 |-----------|-----------|
-| 45MB Parquet, GZIP, 1 row group | ~15ms |
-| 63MB Parquet, ZSTD, 307 row groups | ~10ms |
-| Small Parquet (titanic, 891 rows) | <5ms |
+| Small Parquet (titanic, 11KB) | ~23ms |
+| Small CSV (iris, 4KB) | ~24ms |
+| 167MB Parquet (yellow_tripdata_2015-01) | ~35ms |
+| 1.8GB CSV (yellow_tripdata_2015-01) with `--fast` | ~24ms |
+| 1.8GB CSV (yellow_tripdata_2015-01) default | ~30s |
 
 ### Cold data (binary warm, data not cached)
 
 | File type | Total time |
 |-----------|-----------|
-| 45MB Parquet, GZIP, 1 row group | ~100ms |
-| 63MB Parquet, ZSTD, 307 row groups | ~70ms |
+| Small Parquet (titanic, 11KB) | ~80ms |
+| Small CSV (iris, 4KB) | ~80ms |
+| 167MB Parquet (yellow_tripdata_2015-01) | ~210ms |
+| 1.8GB CSV (yellow_tripdata_2015-01) with `--fast` | ~90ms |
 
 Cold-start bottleneck breakdown:
 - `parquet_footer` (schema + row count): scales with number of row groups
