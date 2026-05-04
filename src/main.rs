@@ -10,8 +10,11 @@ use highlight::rich_highlight;
 
 /// Extremely fast data file peek — preview CSV and Parquet files instantly
 #[derive(Parser)]
-#[command(version, styles = help_styles())]
+#[command(version, styles = help_styles(), override_usage = "dpeek [OPTIONS] [COMMAND] [FILE]")]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<SubCmd>,
+
     /// File to preview (defaults to head)
     file: Option<PathBuf>,
 
@@ -30,9 +33,6 @@ struct Cli {
     /// Field separator character (default: comma). Use \t for tab.
     #[arg(short = 'd', long)]
     delimiter: Option<String>,
-
-    #[command(subcommand)]
-    command: Option<SubCmd>,
 }
 
 #[derive(Subcommand)]
