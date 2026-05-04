@@ -37,6 +37,22 @@ cargo install dpeek
 pip install dpeek
 ```
 
+### Direct download (no package manager)
+
+Download a pre-built binary from [GitHub Releases](https://github.com/Xyc2016/dpeek/releases/latest):
+
+| Platform | File |
+|----------|------|
+| macOS (Apple Silicon) | `dpeek-aarch64-apple-darwin` |
+| Linux (x86-64) | `dpeek-x86_64-unknown-linux-gnu` |
+| Windows (x86-64) | `dpeek-x86_64-pc-windows-msvc.exe` |
+
+```bash
+# macOS example
+curl -fsSL https://github.com/Xyc2016/dpeek/releases/latest/download/dpeek-aarch64-apple-darwin \
+  -o /usr/local/bin/dpeek && chmod +x /usr/local/bin/dpeek
+```
+
 ## Usage
 
 ```bash
