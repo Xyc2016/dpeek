@@ -49,8 +49,8 @@ Download a pre-built binary from [GitHub Releases](https://github.com/Xyc2016/dp
 
 ```bash
 # macOS example
-curl -fsSL https://github.com/Xyc2016/dpeek/releases/latest/download/dpeek-aarch64-apple-darwin \
-  -o /usr/local/bin/dpeek && chmod +x /usr/local/bin/dpeek
+sudo curl -fsSL https://github.com/Xyc2016/dpeek/releases/latest/download/dpeek-aarch64-apple-darwin \
+  -o /usr/local/bin/dpeek && sudo chmod +x /usr/local/bin/dpeek
 ```
 
 ## Usage
