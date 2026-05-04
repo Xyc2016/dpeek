@@ -2,7 +2,7 @@ mod highlight;
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
-use clap::{Parser, Subcommand, builder::Styles};
+use clap::{CommandFactory, Parser, Subcommand, builder::Styles};
 use owo_colors::OwoColorize;
 use polars::prelude::*;
 use terminal_size::{Width, terminal_size};
@@ -10,7 +10,7 @@ use highlight::rich_highlight;
 
 /// Extremely fast data file peek — preview CSV and Parquet files instantly
 #[derive(Parser)]
-#[command(styles = help_styles())]
+#[command(version, styles = help_styles())]
 struct Cli {
     /// File to preview (defaults to head)
     file: Option<PathBuf>,
@@ -100,8 +100,9 @@ fn main() {
             Some(file) =>
                 parse_delimiter_opt(cli.delimiter.as_deref()).and_then(|sep| run(&file, cli.n, Mode::Head, colorize, cli.fast, cli.cols.as_deref(), sep)),
             None => {
-                eprintln!("error: provide a file or subcommand. Try --help");
-                std::process::exit(1);
+                Cli::command().print_help().unwrap();
+                println!();
+                std::process::exit(0);
             }
         },
     };
