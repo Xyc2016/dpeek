@@ -1,6 +1,6 @@
 [package]
 name = "dpeek"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "Extremely fast CLI tool for previewing CSV and Parquet files — like head/tail but data-aware"
 keywords = ["parquet", "csv", "cli", "data", "preview"]
