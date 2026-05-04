@@ -82,11 +82,10 @@ pub enum Mode { Head, Tail }
 fn main() {
     // fetch(n) already limits rows; set -1 so Polars never truncates the display
     std::env::set_var("POLARS_FMT_MAX_ROWS", "-1");
-    // Scale max visible columns and table width to terminal width.
-    // Each column needs ~12 chars min; floor at 4 so narrow terminals still show something.
+    // Show up to 20 columns (covers most analytical datasets); use -c to select columns in wider files.
+    // Set table width to terminal width so Polars uses the full screen.
+    std::env::set_var("POLARS_FMT_MAX_COLS", "20");
     if let Some((Width(w), _)) = terminal_size() {
-        let max_cols = (w / 12).max(4);
-        std::env::set_var("POLARS_FMT_MAX_COLS", max_cols.to_string());
         std::env::set_var("POLARS_TABLE_WIDTH", w.to_string());
     }
     let cli = Cli::parse();
