@@ -1,0 +1,23 @@
+[build-system]
+requires = ["maturin>=1.8,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "dpeek"
+requires-python = ">=3.8"
+description = "Extremely fast CLI tool for previewing CSV and Parquet files"
+license = { text = "MIT" }
+keywords = ["parquet", "csv", "cli", "data", "preview"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Rust",
+    "Topic :: Utilities",
+]
+
+[tool.maturin]
+# Pure binary — not a Python extension module
+bindings = "bin"
