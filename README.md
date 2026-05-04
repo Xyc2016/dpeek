@@ -6,6 +6,8 @@ Think `head`/`tail` but data-aware: shows row counts, column counts, inferred ty
 
 Built on [Polars](https://pola.rs) — a high-performance DataFrame library written in Rust. Output uses the standard Polars table format (column names, types, and values).
 
+![dpeek screenshot](assets/screenshot.png)
+
 ## Install
 
 ```bash
