@@ -9,6 +9,11 @@ license = "MIT"
 repository = "https://github.com/xyc/dpeek"
 readme = "README.md"
 
+[profile.release]
+strip = true       # remove debug symbols (~30-50% size reduction)
+lto = true         # link-time optimization (smaller + faster)
+codegen-units = 1  # required for full LTO
+
 [dependencies]
 polars = { version = "0.53", features = ["parquet", "csv", "lazy", "timezones", "cloud"] }
 clap = { version = "4.6", features = ["derive", "color"] }
