@@ -7,6 +7,7 @@ Project context and coding conventions for AI assistants working in this reposit
 - **Do not `git push` without explicit user approval.** Commit and merge locally, then ask before pushing.
 - **Create a new branch for every feat/fix.** Branch off master, implement, commit, then merge back. Never commit directly to master.
 - **Merge with `--ff-only`.** Always attempt `git merge --ff-only`. If fast-forward is not possible, stop and ask the user how to proceed.
+- **Always commit `Cargo.lock` together with `Cargo.toml`.** When adding or changing dependencies, stage both files in the same commit.
 - **Follow Polars ecosystem conventions.** Feature design should match Polars user intuition: 0-based indexing, hard errors on unknown column names (`ColumnNotFoundError` style), silent clamp on range overflow (Rust/Python slice semantics), etc.
 
 ## Design Principles
@@ -53,7 +54,7 @@ No external setup required. All dependencies are pinned in `Cargo.toml`.
 ## Dependencies
 
 ```toml
-polars = { version = "0.53", features = ["parquet", "csv", "lazy", "timezones", "cloud"] }
+polars = { version = "0.53", features = ["parquet", "csv", "lazy", "timezones"] }
 clap   = { version = "4.6",  features = ["derive", "color"] }
 regex  = "1.12"
 owo-colors = { version = "4.3", features = ["supports-colors"] }
