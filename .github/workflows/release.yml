@@ -27,15 +27,15 @@ jobs:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: dpeek-macos-arm64
+            artifact: dpeek-aarch64-apple-darwin
             bin: dpeek
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: dpeek-linux-x86_64
+            artifact: dpeek-x86_64-unknown-linux-gnu
             bin: dpeek
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: dpeek-windows-x86_64.exe
+            artifact: dpeek-x86_64-pc-windows-msvc.exe
             bin: dpeek.exe
 
     steps:
@@ -98,3 +98,83 @@ jobs:
 
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  update-homebrew-tap:
+    name: Update Homebrew Tap
+    needs: github-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release binaries and compute SHA256
+        run: |
+          TAG="${{ github.ref_name }}"
+          BASE="https://github.com/Xyc2016/dpeek/releases/download/${TAG}"
+          curl -fsSLo macos-arm64  "${BASE}/dpeek-aarch64-apple-darwin"
+          curl -fsSLo linux-x86_64 "${BASE}/dpeek-x86_64-unknown-linux-gnu"
+          echo "VERSION=${TAG#v}"                                              >> "$GITHUB_ENV"
+          echo "SHA_MACOS=$(sha256sum macos-arm64  | awk '{print $1}')"       >> "$GITHUB_ENV"
+          echo "SHA_LINUX=$(sha256sum linux-x86_64 | awk '{print $1}')"       >> "$GITHUB_ENV"
+
+      - name: Checkout homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: Xyc2016/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Write formula
+        env:
+          VERSION: ${{ env.VERSION }}
+          SHA_MACOS: ${{ env.SHA_MACOS }}
+          SHA_LINUX: ${{ env.SHA_LINUX }}
+        run: |
+          python3 - << 'PYEOF'
+          import os, textwrap
+          v  = os.environ['VERSION']
+          sm = os.environ['SHA_MACOS']
+          sl = os.environ['SHA_LINUX']
+          formula = textwrap.dedent(f"""\
+          class Dpeek < Formula
+            desc "Extremely fast CLI tool for previewing CSV and Parquet files"
+            homepage "https://github.com/Xyc2016/dpeek"
+            version "{v}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/Xyc2016/dpeek/releases/download/v{v}/dpeek-aarch64-apple-darwin"
+                sha256 "{sm}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.intel?
+                url "https://github.com/Xyc2016/dpeek/releases/download/v{v}/dpeek-x86_64-unknown-linux-gnu"
+                sha256 "{sl}"
+              end
+            end
+
+            def install
+              if OS.mac?
+                bin.install "dpeek-aarch64-apple-darwin" => "dpeek"
+              else
+                bin.install "dpeek-x86_64-unknown-linux-gnu" => "dpeek"
+              end
+            end
+
+            test do
+              system "#{{bin}}/dpeek", "--version"
+            end
+          end
+          """)
+          with open("tap/Formula/dpeek.rb", "w") as f:
+              f.write(formula)
+          PYEOF
+
+      - name: Commit and push
+        run: |
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/dpeek.rb
+          git commit -m "chore: bump dpeek to ${{ github.ref_name }}"
+          git push

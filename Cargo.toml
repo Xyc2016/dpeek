@@ -6,13 +6,18 @@ description = "Extremely fast CLI tool for previewing CSV and Parquet files — 
 keywords = ["parquet", "csv", "cli", "data", "preview"]
 categories = ["command-line-utilities", "development-tools"]
 license = "MIT"
-repository = "https://github.com/xyc/dpeek"
+repository = "https://github.com/Xyc2016/dpeek"
 readme = "README.md"
 
 [profile.release]
 strip = true       # remove debug symbols (~30-50% size reduction)
 lto = true         # link-time optimization (smaller + faster)
 codegen-units = 1  # required for full LTO
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }{ binary-ext }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "bin"
 
 [dependencies]
 polars = { version = "0.53", features = ["parquet", "csv", "lazy", "timezones"] }
