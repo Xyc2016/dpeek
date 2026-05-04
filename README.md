@@ -30,17 +30,17 @@ dpeek --fast file.csv           # skip full scan (faster, no row count)
 ```
 $ dpeek examples/titanic.parquet
 examples/titanic.parquet  891 rows × 15 cols  (showing top 5)
-┌──────────┬────────┬────────┬──────┬───┬──────┬─────────────┬───────┬───────┐
-│ survived ┆ pclass ┆ sex    ┆ age  ┆ … ┆ deck ┆ embark_town ┆ alive ┆ alone │
-│ ---      ┆ ---    ┆ ---    ┆ ---  ┆   ┆ ---  ┆ ---         ┆ ---   ┆ ---   │
-│ i64      ┆ i64    ┆ str    ┆ f64  ┆   ┆ str  ┆ str         ┆ str   ┆ bool  │
-╞══════════╪════════╪════════╪══════╪═══╪══════╪═════════════╪═══════╪═══════╡
-│ 0        ┆ 3      ┆ male   ┆ 22.0 ┆ … ┆ null ┆ Southampton ┆ no    ┆ false │
-│ 1        ┆ 1      ┆ female ┆ 38.0 ┆ … ┆ C    ┆ Cherbourg   ┆ yes   ┆ false │
-│ 1        ┆ 3      ┆ female ┆ 26.0 ┆ … ┆ null ┆ Southampton ┆ yes   ┆ true  │
-│ 1        ┆ 1      ┆ female ┆ 35.0 ┆ … ┆ C    ┆ Southampton ┆ yes   ┆ false │
-│ 0        ┆ 3      ┆ male   ┆ 35.0 ┆ … ┆ null ┆ Southampton ┆ no    ┆ true  │
-└──────────┴────────┴────────┴──────┴───┴──────┴─────────────┴───────┴───────┘
+┌──────────┬────────┬────────┬──────┬───────┬───────┬─────────┬──────────┬───────┬───────┬────────────┬──────┬─────────────┬───────┬───────┐
+│ survived ┆ pclass ┆ sex    ┆ age  ┆ sibsp ┆ parch ┆ fare    ┆ embarked ┆ class ┆ who   ┆ adult_male ┆ deck ┆ embark_town ┆ alive ┆ alone │
+│ ---      ┆ ---    ┆ ---    ┆ ---  ┆ ---   ┆ ---   ┆ ---     ┆ ---      ┆ ---   ┆ ---   ┆ ---        ┆ ---  ┆ ---         ┆ ---   ┆ ---   │
+│ i64      ┆ i64    ┆ str    ┆ f64  ┆ i64   ┆ i64   ┆ f64     ┆ str      ┆ str   ┆ str   ┆ bool       ┆ str  ┆ str         ┆ str   ┆ bool  │
+╞══════════╪════════╪════════╪══════╪═══════╪═══════╪═════════╪══════════╪═══════╪═══════╪════════════╪══════╪═════════════╪═══════╪═══════╡
+│ 0        ┆ 3      ┆ male   ┆ 22.0 ┆ 1     ┆ 0     ┆ 7.25    ┆ S        ┆ Third ┆ man   ┆ true       ┆ null ┆ Southampton ┆ no    ┆ false │
+│ 1        ┆ 1      ┆ female ┆ 38.0 ┆ 1     ┆ 0     ┆ 71.2833 ┆ C        ┆ First ┆ woman ┆ false      ┆ C    ┆ Cherbourg   ┆ yes   ┆ false │
+│ 1        ┆ 3      ┆ female ┆ 26.0 ┆ 0     ┆ 0     ┆ 7.925   ┆ S        ┆ Third ┆ woman ┆ false      ┆ null ┆ Southampton ┆ yes   ┆ true  │
+│ 1        ┆ 1      ┆ female ┆ 35.0 ┆ 1     ┆ 0     ┆ 53.1    ┆ S        ┆ First ┆ woman ┆ false      ┆ C    ┆ Southampton ┆ yes   ┆ false │
+│ 0        ┆ 3      ┆ male   ┆ 35.0 ┆ 0     ┆ 0     ┆ 8.05    ┆ S        ┆ Third ┆ man   ┆ true       ┆ null ┆ Southampton ┆ no    ┆ true  │
+└──────────┴────────┴────────┴──────┴───────┴───────┴─────────┴──────────┴───────┴───────┴────────────┴──────┴─────────────┴───────┴───────┘
 ```
 
 ### Schema
