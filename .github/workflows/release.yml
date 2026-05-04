@@ -47,26 +47,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Build wheel and binary
+        uses: PyO3/maturin-action@v1
         with:
-          targets: ${{ matrix.target }}
+          target: ${{ matrix.target }}
+          args: --release --out dist
+          manylinux: auto
 
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Rename binary
+      - name: Copy binary
         shell: bash
         run: cp target/${{ matrix.target }}/release/${{ matrix.bin }} ${{ matrix.artifact }}
 
-      - name: Upload artifact
+      - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: wheel-${{ matrix.target }}
+          path: dist/*.whl
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.target }}
           path: ${{ matrix.artifact }}
 
-  release:
-    name: Create Release
+  github-release:
+    name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -74,6 +79,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
+          pattern: bin-*
           merge-multiple: true
 
       - name: Create GitHub Release
@@ -81,3 +87,20 @@ jobs:
         with:
           files: dpeek-*
           generate_release_notes: true
+
+  pypi-publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          merge-multiple: true
+          path: dist
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
