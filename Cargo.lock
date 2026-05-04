@@ -662,7 +662,7 @@ dependencies = [
 
 [[package]]
 name = "dpeek"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anstyle",
  "clap",
@@ -1945,7 +1945,6 @@ dependencies = [
  "bitflags",
  "chrono",
  "either",
- "futures",
  "memchr",
  "polars-arrow",
  "polars-buffer",
@@ -1960,7 +1959,6 @@ dependencies = [
  "polars-time",
  "polars-utils",
  "rayon",
- "tokio",
  "version_check",
 ]
 
@@ -1982,7 +1980,6 @@ dependencies = [
  "polars-utils",
  "rayon",
  "recursive",
- "tokio",
 ]
 
 [[package]]
