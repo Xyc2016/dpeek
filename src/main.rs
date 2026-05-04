@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand, builder::Styles};
 use owo_colors::OwoColorize;
 use polars::prelude::*;
+use terminal_size::{Width, terminal_size};
 use highlight::rich_highlight;
 
 /// Extremely fast data file peek — preview CSV and Parquet files instantly
@@ -81,6 +82,13 @@ pub enum Mode { Head, Tail }
 fn main() {
     // fetch(n) already limits rows; set -1 so Polars never truncates the display
     std::env::set_var("POLARS_FMT_MAX_ROWS", "-1");
+    // Scale max visible columns and table width to terminal width.
+    // Each column needs ~12 chars min; floor at 4 so narrow terminals still show something.
+    if let Some((Width(w), _)) = terminal_size() {
+        let max_cols = (w / 12).max(4);
+        std::env::set_var("POLARS_FMT_MAX_COLS", max_cols.to_string());
+        std::env::set_var("POLARS_TABLE_WIDTH", w.to_string());
+    }
     let cli = Cli::parse();
     let colorize = std::io::stdout().is_terminal();
 
