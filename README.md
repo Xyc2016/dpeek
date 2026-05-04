@@ -10,8 +10,31 @@ Built on [Polars](https://pola.rs) — a high-performance DataFrame library writ
 
 ## Install
 
+### Recommended — zero setup, runs anywhere
+
 ```bash
-cargo install --path .
+uvx dpeek file.parquet        # auto-installs on first run (uv required)
+```
+
+`uvx` is an alias for `uv tool run`. It downloads dpeek on first use, caches it, and runs it — no manual install step needed. Get uv at [docs.astral.sh/uv](https://docs.astral.sh/uv/).
+
+### Install permanently (pick one)
+
+```bash
+# Add to global PATH via uv (recommended for daily use)
+uv tool install dpeek         # then just: dpeek file.parquet
+
+# Homebrew (macOS / Linux)
+brew install Xyc2016/tap/dpeek
+
+# Rust toolchain — downloads pre-built binary, no compile needed
+cargo binstall dpeek
+
+# Rust toolchain — compile from source
+cargo install dpeek
+
+# Python / pip
+pip install dpeek
 ```
 
 ## Usage
