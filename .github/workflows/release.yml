@@ -34,9 +34,15 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: dpeek-macos-arm64
+            bin: dpeek
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: dpeek-linux-x86_64
+            bin: dpeek
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: dpeek-windows-x86_64.exe
+            bin: dpeek.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -50,7 +56,8 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Rename binary
-        run: cp target/${{ matrix.target }}/release/dpeek ${{ matrix.artifact }}
+        shell: bash
+        run: cp target/${{ matrix.target }}/release/${{ matrix.bin }} ${{ matrix.artifact }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
